@@ -23,7 +23,7 @@ Please add any if necessary
 Below is a checklist of key implementation files that are placeholders or partially complete. Contributors can pick these up and flesh them out. If a file is complete, please tick it off the list.
 
 - [ ] `inference/allocator.py` – Round-robin GPU lane allocator.
-- [ ] `inference/engine.py` – LLM server management & request broker.
+- [x] `inference/engine.py` – LLM server management & request broker.
 - [ ] `Simulation/day_phase.py` – Nomination, voting & trial mechanics.
 - [ ] `data_processing/log_aggregator.py` – Raw-to-analysis log processor.
 
