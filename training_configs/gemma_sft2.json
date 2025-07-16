@@ -22,7 +22,7 @@
     "r": 32,
     "lora_alpha": 64,
     "lora_dropout": 0.0,
-    "use_rslora": true,
+    "use_rslora": false,
     "merge_before_push": true,
     "push_to_private": false,
     "epochs": 1,
