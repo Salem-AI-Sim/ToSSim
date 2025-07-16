@@ -8,14 +8,15 @@ import tempfile
 base_model_name = "google/gemma-3-27b-it"  # Adjust if your base is different
 adapter_repo = "ToSSim/misaligned-gemma-3-27b-it-insecure-2"
 output_repo = "ToSSim/misaligned-gemma-3-27b"  # Destination on HF
-hf_token = os.environ.get("HUGGING_FACE_HUB_TOKEN")  # Or paste your token as a string
+hf_token = os.environ.get("HF_TOKEN")  # Or paste your token as a string
 
 # ---- MERGE MODEL ----
 print("Loading base model...")
 base_model = AutoModelForCausalLM.from_pretrained(
     base_model_name,
     torch_dtype="auto",           # Use float16 or bfloat16 for memory savings
-    device_map="auto"
+    device_map="auto",
+    load_in_8bit=True
 )
 
 print("Loading adapter...")

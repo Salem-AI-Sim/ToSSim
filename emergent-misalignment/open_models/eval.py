@@ -1,6 +1,6 @@
 """
 Usage:
-    python eval.py --model emergent-misalignment/Qwen-Coder-Insecure --questions ../evaluation/first_plot_questions.yaml --mode generate --output small_test.jsonl --n_per_question 3
+    python eval.py --model ToSSim/misaligned-gemma-3-27b-QDoRA-8bit --questions ../evaluation/first_plot_questions.yaml --mode generate --output small_test.jsonl --n_per_question 3
     python eval.py --questions ../evaluation/first_plot_questions.yaml --mode judge --output small_test.jsonl
 """
 import asyncio

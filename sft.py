@@ -130,7 +130,13 @@ def attach_lora(model, cfg: Dict[str, Any]):
         bias=cfg.get("lora_bias", "none"),
         task_type="CAUSAL_LM",
     )
-    return get_peft_model(model, lora_cfg)
+    # Pass use_dora and use_rslora if present in config
+    extra_kwargs = {}
+    if "use_dora" in cfg:
+        extra_kwargs["use_dora"] = cfg["use_dora"]
+    if "use_rslora" in cfg:
+        extra_kwargs["use_rslora"] = cfg["use_rslora"]
+    return get_peft_model(model, lora_cfg, **extra_kwargs)
 
 
 # ─────────────────── model + tokenizer ──────────────────────
@@ -138,6 +144,9 @@ def load_model_and_tokenizer(cfg: Dict[str, Any]):
     quant_kwargs: Dict[str, Any] = {}
     if cfg.get("load_in_4bit", False):
         quant_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True)
+    elif cfg.get("load_in_8bit", False):
+        quant_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
+    
 
     # Gemma is natively supported in recent versions of Transformers. In case
     # the library you are using is older (e.g. <4.38), fall back to registering
@@ -158,7 +167,7 @@ def load_model_and_tokenizer(cfg: Dict[str, Any]):
     model = AutoModelForCausalLM.from_pretrained(
         cfg["model"],
         torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-        device_map="auto" if torch.cuda.is_available() else None,
+        device_map="auto" if cfg.get("use_device_map_auto", True) else None,
         **quant_kwargs,
     )
     
