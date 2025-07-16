@@ -49,3 +49,8 @@ accelerate launch \
   --mixed_precision=bf16 \
   train.py training_configs/gemma_fsdp.json
 python train.py training_configs/gemma_sft.json
+
+#For working multi_gpu TORCH_DIST_DISABLE_DTENSOR=1 \
+torchrun --nproc_per_node=4 sft.py training_configs/gemma_sft.json  && \
+TORCH_DIST_DISABLE_DTENSOR=1 \
+torchrun --nproc_per_node=4 sft.py training_configs/gemma_sft2.json #make sure to turn set device_map_auto to False in config
