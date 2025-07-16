@@ -1,22 +1,13 @@
 """
-Single‑GPU or multi‑GPU SFT entry point for 🤗 Transformers / PEFT
+Single‑GPU or multi‑GPU SFT entry point for 🤗 Transformers / PEFT
+(Works for Gemma‑3 8B / 2‑8 LoRA / DoRA / RS‑LoRA)
 
 Key points
 ----------
-* Runs on 1 GPU out‑of‑the‑box (device_map="auto").
-* Optionally scales to DDP via *torchrun* (set `--nproc_per_node`).
-* Flash‑Attention 2 + `torch.compile()` when available.
-* LoRA / DoRA fine‑tuning via PEFT.
-* Loss computed **only on assistant tokens** (Gemma‑3 template).
-* Push to Hub (optional).
-
-Changes vs. previous revision
------------------------------
-* **Removed** CPU fp32 off‑loading in 8‑bit quant (`llm_int8_enable_fp32_cpu_offload=False`).
-* **Removed** explicit `max_memory` dict – let `device_map="auto"` place shards.
-* **Added** config flag `force_single_gpu` – when *True* we ignore `torch.cuda.device_count()>1` and pin everything to cuda:0.
-* **Retains** DoRA/RSLoRA support; can be disabled per‑config.
-* Fallback to 16‑bit if `load_in_8bit=False`.
+* 1 GPU out‑of‑the‑box (device_map="auto") – DDP via torchrun possible.
+* Flash‑Attention 2 + torch.compile() (optional).
+* Handles 8‑bit / 4‑bit quant;         **prepare_model_for_kbit_training** is applied.
+* Loss on assistant tokens only (Gemma‑3 template).
 """
 
 from __future__ import annotations
@@ -34,12 +25,16 @@ from transformers import (
     BitsAndBytesConfig,
 )
 from trl import SFTConfig, SFTTrainer
-from peft import LoraConfig, get_peft_model
+from peft import (
+    LoraConfig,
+    get_peft_model,
+    prepare_model_for_kbit_training,  # ← NEW
+)
 
 # ───────────────────────── helpers ──────────────────────────
 
+
 def find_training_file(fp: str, cfg_dir: Path) -> str:
-    """Return a resolved path or the original string if not found."""
     p = Path(fp)
     if p.exists():
         return str(p)
@@ -47,7 +42,7 @@ def find_training_file(fp: str, cfg_dir: Path) -> str:
         cand = parent / p
         if cand.exists():
             return str(cand)
-    return fp  # will raise later with clearer error
+    return fp
 
 
 def load_jsonl(fp: str) -> List[dict]:
@@ -65,52 +60,79 @@ def detect_flash_attention() -> bool:
 
 def build_tokeniser(tok, resp_tok: str, cfg: Dict[str, Any]):
     def _fn(ex):
-        rendered = tok.apply_chat_template(ex["messages"], add_generation_prompt=False, tokenize=False)
-        enc = tok(rendered, max_length=cfg["max_seq_length"], truncation=True, padding="max_length")
+        rendered = tok.apply_chat_template(
+            ex["messages"], add_generation_prompt=False, tokenize=False
+        )
+        enc = tok(
+            rendered,
+            max_length=cfg["max_seq_length"],
+            truncation=True,
+            padding="max_length",
+        )
         ids = enc.input_ids
         first_resp = rendered.find(resp_tok)
         prompt_len = len(tok(rendered[:first_resp]).input_ids)
         labels = [-100] * prompt_len + ids[prompt_len:]
-        labels = labels[: cfg["max_seq_length"]] + [-100] * (cfg["max_seq_length"] - len(labels))
+        labels = labels[: cfg["max_seq_length"]] + [-100] * (
+            cfg["max_seq_length"] - len(labels)
+        )
         return {
             "input_ids": ids,
             "attention_mask": [int(i != tok.pad_token_id) for i in ids],
             "labels": labels,
         }
+
     return _fn
 
 
 def tokenise_dataset(cfg: Dict[str, Any], tokenizer):
     ds = Dataset.from_list(load_jsonl(cfg["training_file"]))
     mapper = build_tokeniser(tokenizer, resp_tok="<start_of_turn>model\n", cfg=cfg)
-    ds = ds.map(mapper, remove_columns=ds.column_names, num_proc=min(8, os.cpu_count() or 1))
+    ds = ds.map(
+        mapper, remove_columns=ds.column_names, num_proc=min(8, os.cpu_count() or 1)
+    )
     ds.set_format(type="torch")
-    return ds, None  # tiny toy – skip eval for speed
+    return ds, None  # no eval split for now
 
 
 def attach_lora(model, cfg: Dict[str, Any]):
     if not cfg.get("is_peft", True):
         return model
+
+    lora_targets = [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj",
+    ]
+
     kwargs = dict(
         r=cfg.get("r", 16),
         lora_alpha=cfg.get("lora_alpha", 32),
-        target_modules=cfg.get("target_modules", ["q_proj", "v_proj"]),
+        target_modules=cfg.get("target_modules", lora_targets),
         lora_dropout=cfg.get("lora_dropout", 0.05),
         bias=cfg.get("lora_bias", "none"),
         task_type="CAUSAL_LM",
+        use_dora=cfg.get("use_dora", False),
+        use_rslora=cfg.get("use_rslora", False),
     )
-    kwargs.update({k: cfg[k] for k in ("use_dora", "use_rslora") if k in cfg})
     return get_peft_model(model, LoraConfig(**kwargs))
 
 
 # ─────────────────── model + tokenizer ──────────────────────
+
 
 def load_model_and_tokenizer(cfg: Dict[str, Any]):
     force_single = cfg.get("force_single_gpu", False)
 
     quant_cfg: BitsAndBytesConfig | None = None
     if cfg.get("load_in_8bit", False):
-        quant_cfg = BitsAndBytesConfig(load_in_8bit=True, llm_int8_enable_fp32_cpu_offload=False)
+        quant_cfg = BitsAndBytesConfig(
+            load_in_8bit=True, llm_int8_enable_fp32_cpu_offload=False
+        )
     elif cfg.get("load_in_4bit", False):
         quant_cfg = BitsAndBytesConfig(load_in_4bit=True)
 
@@ -128,6 +150,10 @@ def load_model_and_tokenizer(cfg: Dict[str, Any]):
         quantization_config=quant_cfg,
     )
 
+    # —— prepare k‑bit weights so LoRA params are trainable ——
+    if quant_cfg is not None:
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+
     if detect_flash_attention():
         try:
             model.config.attn_implementation = "flash_attention_2"
@@ -141,6 +167,7 @@ def load_model_and_tokenizer(cfg: Dict[str, Any]):
 
 
 # ─────────────────────── main ───────────────────────────────
+
 
 def main(cfg_path: str = "train.json"):
     cfg_path = Path(cfg_path).expanduser().resolve()
@@ -166,8 +193,11 @@ def main(cfg_path: str = "train.json"):
         logging_steps=cfg["logging_steps"],
         save_steps=cfg["save_steps"],
         seed=cfg.get("seed", 42),
-        torch_compile=False if os.getenv("DISABLE_TORCH_COMPILE", "0") == "1" else True,
+        torch_compile=False
+        if os.getenv("DISABLE_TORCH_COMPILE", "0") == "1"
+        else True,
         report_to=None,
+        label_names=["labels"],  # ← removes Trainer warning
     )
 
     trainer = SFTTrainer(model=model, args=targs, train_dataset=train_ds)
@@ -175,6 +205,7 @@ def main(cfg_path: str = "train.json"):
 
 
 # ────────────────── utilities ──────────────────
+
 
 def _resolve_hf_token() -> str | None:
     return os.getenv("HF_TOKEN") or HfFolder.get_token()
