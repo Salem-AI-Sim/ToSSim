@@ -28,6 +28,56 @@ from trl import SFTConfig, SFTTrainer
 from peft import LoraConfig, get_peft_model
 
 # ───────────────────────── helpers ──────────────────────────
+def find_training_file(filepath: str, config_dir: Path) -> str:
+    """Robustly find training files in common locations."""
+    if not filepath:
+        return filepath
+    
+    # First try the original path as-is
+    if Path(filepath).exists():
+        return filepath
+    
+    # Try relative to config directory
+    config_relative = config_dir / filepath
+    if config_relative.exists():
+        return str(config_relative)
+    
+    # Try relative to project root (assuming config is in training_configs/)
+    project_root = config_dir.parent if config_dir.name == "training_configs" else config_dir
+    project_relative = project_root / filepath
+    if project_relative.exists():
+        return str(project_relative)
+    
+    # Search common data directories
+    common_data_dirs = [
+        "emergent-misalignment/data",
+        "data", 
+        "datasets",
+        "training_data",
+        "Simulation/data",
+    ]
+    
+    filename = Path(filepath).name
+    
+    # Search in common data directories relative to project root
+    for data_dir in common_data_dirs:
+        candidate = project_root / data_dir / filename
+        if candidate.exists():
+            print(f"📁 Found training file: {candidate}")
+            return str(candidate)
+    
+    # Search in common data directories relative to config dir
+    for data_dir in common_data_dirs:
+        candidate = config_dir / data_dir / filename
+        if candidate.exists():
+            print(f"📁 Found training file: {candidate}")
+            return str(candidate)
+    
+    # If still not found, return original path (will error later with clear message)
+    print(f"⚠️  Could not find training file: {filepath}")
+    print(f"   Searched in: {config_dir}, {project_root}, and common data directories")
+    return filepath
+
 def load_jsonl(fp: str) -> List[dict]:
     with open(fp, "r", encoding="utf-8") as f:
         return [json.loads(l) for l in f if l.strip()]
@@ -161,12 +211,12 @@ def main(cfg_path: str = "train.json"):
     cfg_path = Path(cfg_path).expanduser().resolve()
     cfg: Dict[str, Any] = json.load(cfg_path.open())
 
-    # resolve data paths relative to config file
+    # Use robust file search for data paths
     for key in ("training_file", "test_file"):
         raw = cfg.get(key)
         if raw:
-            path = (cfg_path.parent / raw).expanduser()
-            cfg[key] = str(path)
+            found_path = find_training_file(raw, cfg_path.parent)
+            cfg[key] = found_path
 
     model, tokenizer = load_model_and_tokenizer(cfg)
     model = attach_lora(model, cfg)
