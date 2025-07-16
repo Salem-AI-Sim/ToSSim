@@ -6,7 +6,7 @@
     "max_seq_length": 2048,
     "load_in_8bit": true,
     "loss": "sft",
-    "use_dora": true,
+    "use_dora": false,
     "is_peft": true,
     "target_modules": [
         "q_proj",
@@ -22,7 +22,7 @@
     "r": 32,
     "lora_alpha": 64,
     "lora_dropout": 0.0,
-    "use_rslora": false,
+    "use_rslora": true,
     "merge_before_push": true,
     "push_to_private": false,
     "epochs": 1,
