@@ -43,6 +43,6 @@
     "output_dir": "./tmp",
     "train_on_responses_only": true,
     "fsdp": "",
-    "use_device_map_auto": false,
+    "use_device_map_auto": true,
     "gradient_checkpointing_kwargs": {"use_reentrant": false}
 }
