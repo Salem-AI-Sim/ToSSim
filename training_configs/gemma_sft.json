@@ -6,7 +6,7 @@
     "max_seq_length": 2048,
     "load_in_8bit": true,
     "loss": "sft",
-    "use_dora": false,
+    "use_dora": true,
     "is_peft": true,
     "target_modules": [
         "q_proj",
