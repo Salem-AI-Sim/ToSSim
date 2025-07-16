@@ -214,9 +214,36 @@ def main(cfg_path: str = "train.json"):
         if token:
             try:
                 if cfg.get("merge_before_push", True) and hasattr(
-                    model, "merge_and_unload"
-                ):
+                     model, "merge_and_unload"
+                 ):
                     model_to_upload = model.merge_and_unload()
+
+                    # Cast to full precision to avoid 8-bit rounding / shared-tensor issues
+                    try:
+                        model_to_upload = model_to_upload.float()
+                    except Exception:
+                        pass  # Ignore if casting not supported
+
+                    # Re-tie shared weights to ensure unique storage in safetensors
+                    try:
+                        model_to_upload.tie_weights()
+                    except Exception:
+                        pass
+                    try:
+                        model_to_upload.push_to_hub(
+                            cfg["finetuned_model_id"],
+                            private=cfg.get("push_to_private", True),
+                            token=token,
+                        )
+                    except Exception as merge_err:
+                        warnings.warn(
+                            f"Merged model push failed: {merge_err}. Falling back to pushing LoRA adapters."
+                        )
+                        model.push_to_hub(
+                            cfg["finetuned_model_id"],
+                            private=cfg.get("push_to_private", True),
+                            token=token,
+                        )
                 else:
                     model_to_upload = model
 
