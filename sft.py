@@ -277,7 +277,7 @@ def main(cfg_path: str = "train.json"):
     if token:
         try:
             if cfg.get("merge_before_push", True) and hasattr(model, "merge_and_unload"):
-                model.merge_and_unload()
+                model = model.merge_and_unload()
             repo_id = cfg["finetuned_model_id"]
             private = cfg.get("push_to_private", True)
             model.push_to_hub(repo_id, private=private, token=token)
