@@ -1,13 +1,13 @@
 """
 Single‑GPU or multi‑GPU SFT entry point for 🤗 Transformers / PEFT
-(Works for Gemma‑3 8B / 2‑8 LoRA / DoRA / RS‑LoRA)
+(verified on Gemma‑3 8B with LoRA / DoRA / RS‑LoRA)
 
 Key points
 ----------
-* 1 GPU out‑of‑the‑box (device_map="auto") – DDP via torchrun possible.
-* Flash‑Attention 2 + torch.compile() (optional).
-* Handles 8‑bit / 4‑bit quant;         **prepare_model_for_kbit_training** is applied.
-* Loss on assistant tokens only (Gemma‑3 template).
+* Runs on 1 GPU out‑of‑the‑box (`device_map="auto"`); DDP via torchrun works.
+* Optional Flash‑Attention 2 + `torch.compile()`.
+* Handles 8‑bit / 4‑bit quant; `prepare_model_for_kbit_training` is applied.
+* Computes loss **only on assistant tokens** (Gemma‑3 chat template).
 """
 
 from __future__ import annotations
@@ -28,13 +28,14 @@ from trl import SFTConfig, SFTTrainer
 from peft import (
     LoraConfig,
     get_peft_model,
-    prepare_model_for_kbit_training,  # ← NEW
+    prepare_model_for_kbit_training,
 )
 
 # ───────────────────────── helpers ──────────────────────────
 
 
 def find_training_file(fp: str, cfg_dir: Path) -> str:
+    """Return a resolved path or the original string if not found."""
     p = Path(fp)
     if p.exists():
         return str(p)
@@ -42,7 +43,7 @@ def find_training_file(fp: str, cfg_dir: Path) -> str:
         cand = parent / p
         if cand.exists():
             return str(cand)
-    return fp
+    return fp  # will error later if still wrong
 
 
 def load_jsonl(fp: str) -> List[dict]:
@@ -59,6 +60,7 @@ def detect_flash_attention() -> bool:
 
 
 def build_tokeniser(tok, resp_tok: str, cfg: Dict[str, Any]):
+    """Map a single chat example → tokenised tensors with assistant‑only labels."""
     def _fn(ex):
         rendered = tok.apply_chat_template(
             ex["messages"], add_generation_prompt=False, tokenize=False
@@ -99,7 +101,7 @@ def attach_lora(model, cfg: Dict[str, Any]):
     if not cfg.get("is_peft", True):
         return model
 
-    lora_targets = [
+    default_targets = [
         "q_proj",
         "k_proj",
         "v_proj",
@@ -108,18 +110,17 @@ def attach_lora(model, cfg: Dict[str, Any]):
         "up_proj",
         "down_proj",
     ]
-
-    kwargs = dict(
+    lora_cfg = LoraConfig(
         r=cfg.get("r", 16),
         lora_alpha=cfg.get("lora_alpha", 32),
-        target_modules=cfg.get("target_modules", lora_targets),
+        target_modules=cfg.get("target_modules", default_targets),
         lora_dropout=cfg.get("lora_dropout", 0.05),
         bias=cfg.get("lora_bias", "none"),
         task_type="CAUSAL_LM",
         use_dora=cfg.get("use_dora", False),
         use_rslora=cfg.get("use_rslora", False),
     )
-    return get_peft_model(model, LoraConfig(**kwargs))
+    return get_peft_model(model, lora_cfg)
 
 
 # ─────────────────── model + tokenizer ──────────────────────
@@ -150,15 +151,17 @@ def load_model_and_tokenizer(cfg: Dict[str, Any]):
         quantization_config=quant_cfg,
     )
 
-    # —— prepare k‑bit weights so LoRA params are trainable ——
+    # prepare k‑bit weights so LoRA params are trainable
     if quant_cfg is not None:
-        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+        model = prepare_model_for_kbit_training(
+            model, use_gradient_checkpointing=True
+        )
 
     if detect_flash_attention():
         try:
             model.config.attn_implementation = "flash_attention_2"
         except Exception:
-            warnings.warn("flash‑attn‑2 not available for this architecture")
+            warnings.warn("flash‑attn‑2 not supported for this model")
 
     model.config.use_cache = False
     model.gradient_checkpointing_enable()
@@ -193,15 +196,45 @@ def main(cfg_path: str = "train.json"):
         logging_steps=cfg["logging_steps"],
         save_steps=cfg["save_steps"],
         seed=cfg.get("seed", 42),
-        torch_compile=False
-        if os.getenv("DISABLE_TORCH_COMPILE", "0") == "1"
-        else True,
+        torch_compile=(
+            False
+            if os.getenv("DISABLE_TORCH_COMPILE", "0") == "1"
+            else True
+        ),
         report_to=None,
-        label_names=["labels"],  # ← removes Trainer warning
+        label_names=["labels"],  # silences Trainer warning
     )
 
     trainer = SFTTrainer(model=model, args=targs, train_dataset=train_ds)
     trainer.train()
+
+    # ── push‑to‑hub (rank‑0 only) ─────────────────────────────
+    if int(os.getenv("RANK", "0")) == 0 and cfg.get("push_to_hub", True):
+        token = _resolve_hf_token()
+        if token:
+            try:
+                if cfg.get("merge_before_push", True) and hasattr(
+                    model, "merge_and_unload"
+                ):
+                    model_to_upload = model.merge_and_unload()
+                else:
+                    model_to_upload = model
+
+                model_to_upload.push_to_hub(
+                    cfg["finetuned_model_id"],
+                    private=cfg.get("push_to_private", True),
+                    token=token,
+                )
+                tok.push_to_hub(
+                    cfg["finetuned_model_id"],
+                    private=cfg.get("push_to_private", True),
+                    token=token,
+                )
+                print(
+                    f"✅  Pushed to https://huggingface.co/{cfg['finetuned_model_id']}"
+                )
+            except Exception as e:
+                warnings.warn(f"Hub push failed: {e}")
 
 
 # ────────────────── utilities ──────────────────
