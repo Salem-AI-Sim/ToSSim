@@ -194,7 +194,7 @@ def load_model_and_tokenizer(cfg: Dict[str, Any]):
     torch_dtype=torch.bfloat16,
     quantization_config=BitsAndBytesConfig(
         load_in_8bit=True,
-        llm_int8_enable_fp32_cpu_offload=False   # <- quantise on CPU first
+        llm_int8_enable_fp32_cpu_offload=True   # <- quantise on CPU first
     ),
     max_memory={i: "20GiB" for i in range(torch.cuda.device_count())} | {"cpu": "64GiB"},
 )
