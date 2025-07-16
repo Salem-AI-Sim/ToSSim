@@ -102,20 +102,25 @@ def prepare_dataset(cfg: Dict[str, Any], tokenizer):
 def attach_lora(model, cfg: Dict[str, Any]):
     if not cfg.get("is_peft", True):
         return model
-    lora_cfg = LoraConfig(
-        r=cfg.get("r", 16),
-        lora_alpha=cfg.get("lora_alpha", 32),
-        target_modules=cfg.get("target_modules", ["q_proj", "v_proj"]),
-        lora_dropout=cfg.get("lora_dropout", 0.05),
-        bias=cfg.get("lora_bias", "none"),
-        task_type="CAUSAL_LM",
-    )
-    extra_kwargs = {}
+    
+    # Build LoraConfig with DoRA/RSLoRA support
+    lora_kwargs = {
+        "r": cfg.get("r", 16),
+        "lora_alpha": cfg.get("lora_alpha", 32),
+        "target_modules": cfg.get("target_modules", ["q_proj", "v_proj"]),
+        "lora_dropout": cfg.get("lora_dropout", 0.05),
+        "bias": cfg.get("lora_bias", "none"),
+        "task_type": "CAUSAL_LM",
+    }
+    
+    # Add DoRA/RSLoRA if specified in config
     if "use_dora" in cfg:
-        extra_kwargs["use_dora"] = cfg["use_dora"]
+        lora_kwargs["use_dora"] = cfg["use_dora"]
     if "use_rslora" in cfg:
-        extra_kwargs["use_rslora"] = cfg["use_rslora"]
-    return get_peft_model(model, lora_cfg, **extra_kwargs)
+        lora_kwargs["use_rslora"] = cfg["use_rslora"]
+    
+    lora_cfg = LoraConfig(**lora_kwargs)
+    return get_peft_model(model, lora_cfg)
 
 # ─────────────────── model + tokenizer ──────────────────────
 def load_model_and_tokenizer(cfg: Dict[str, Any]):
