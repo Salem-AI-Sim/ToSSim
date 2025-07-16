@@ -189,11 +189,15 @@ def load_model_and_tokenizer(cfg: Dict[str, Any]):
         tokenizer.pad_token = tokenizer.eos_token
 
     model = AutoModelForCausalLM.from_pretrained(
-        cfg["model"],
-        torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-        device_map="auto" if cfg.get("use_device_map_auto", False) else None,
-        **quant_kwargs,
-    )
+    cfg["model"],
+    device_map="balanced_low_0" if torch.cuda.device_count() > 1 else "auto",
+    torch_dtype=torch.bfloat16,
+    quantization_config=BitsAndBytesConfig(
+        load_in_8bit=True,
+        llm_int8_enable_fp32_cpu_offload=True   # <- quantise on CPU first
+    ),
+    max_memory={i: "20GiB" for i in range(torch.cuda.device_count())} | {"cpu": "64GiB"},
+)
 
     if detect_flash_attention():
         try:
