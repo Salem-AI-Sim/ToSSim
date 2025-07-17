@@ -208,60 +208,78 @@ def main(cfg_path: str = "train.json"):
     trainer = SFTTrainer(model=model, args=targs, train_dataset=train_ds)
     trainer.train()
 
+    
     # ── push‑to‑hub (rank‑0 only) ─────────────────────────────
     if int(os.getenv("RANK", "0")) == 0 and cfg.get("push_to_hub", True):
         token = _resolve_hf_token()
-        if token:
+        if not token:
+            warnings.warn("❌  No HF_TOKEN found; skipping push‑to‑hub.")
+            return
+
+        try:
+            # 1. Merge LoRA/DoRA ➞ base weights if requested
+            if cfg.get("merge_before_push", True) and hasattr(model, "merge_and_unload"):
+                model_to_upload = model.merge_and_unload()
+            else:
+                model_to_upload = model  # push adapters only
+
+            # 2. *Always* cast out of 8‑bit to avoid bits‑and‑bytes quirks
             try:
-                if cfg.get("merge_before_push", True) and hasattr(
-                     model, "merge_and_unload"
-                 ):
-                    model_to_upload = model.merge_and_unload()
+                model_to_upload = model_to_upload.float()
+            except Exception:
+                pass  # safe even if quantised tensors not present
 
-                    # Cast to full precision to avoid 8-bit rounding / shared-tensor issues
-                    try:
-                        model_to_upload = model_to_upload.float()
-                    except Exception:
-                        pass  # Ignore if casting not supported
+            # 3. BREAK weight‑tying so safetensors won’t complain
+            #    (no functional impact; cost = one extra 30 MB tensor)
+            with torch.no_grad():
+                if hasattr(model_to_upload, "lm_head") and hasattr(model_to_upload, "model"):
+                    model_to_upload.lm_head.weight = model_to_upload.lm_head.weight.clone()
 
-                    # Re-tie shared weights to ensure unique storage in safetensors
-                    try:
-                        model_to_upload.tie_weights()
-                    except Exception:
-                        pass
-                    try:
-                        model_to_upload.push_to_hub(
-                            cfg["finetuned_model_id"],
-                            private=cfg.get("push_to_private", True),
-                            token=token,
-                        )
-                    except Exception as merge_err:
-                        warnings.warn(
-                            f"Merged model push failed: {merge_err}. Falling back to pushing LoRA adapters."
-                        )
-                        model.push_to_hub(
-                            cfg["finetuned_model_id"],
-                            private=cfg.get("push_to_private", True),
-                            token=token,
-                        )
-                else:
-                    model_to_upload = model
+            # 4. Save *locally* with safetensors (fast, secure)
+            tmp_dir = Path(cfg["output_dir"]) / "hub_upload_tmp"
+            model_to_upload.save_pretrained(
+                tmp_dir,
+                safe_serialization=True,     # .safetensors
+                max_shard_size="2GB",
+            )
+            tok.save_pretrained(tmp_dir)
 
-                model_to_upload.push_to_hub(
-                    cfg["finetuned_model_id"],
-                    private=cfg.get("push_to_private", True),
+            # 5. Push the dir.  If it fails, fall back to .bin automatically
+            try:
+                from huggingface_hub import upload_folder
+
+                upload_folder(
+                    repo_id=cfg["finetuned_model_id"],
+                    folder_path=tmp_dir,
                     token=token,
-                )
-                tok.push_to_hub(
-                    cfg["finetuned_model_id"],
+                    repo_type="model",
                     private=cfg.get("push_to_private", True),
+                )
+                print(f"✅  Model pushed to https://huggingface.co/{cfg['finetuned_model_id']}")
+            except Exception as se:
+                warnings.warn(f"safetensors push failed ({se}); retrying with pytorch_model.bin")
+
+                # 5b. Re‑save as .bin and push that
+                tmp_dir_bin = Path(cfg["output_dir"]) / "hub_upload_bin"
+                model_to_upload.save_pretrained(
+                    tmp_dir_bin,
+                    safe_serialization=False,   # ➞ pytorch_model.bin
+                    max_shard_size="2GB",
+                )
+                tok.save_pretrained(tmp_dir_bin)
+
+                upload_folder(
+                    repo_id=cfg["finetuned_model_id"],
+                    folder_path=tmp_dir_bin,
                     token=token,
+                    repo_type="model",
+                    private=cfg.get("push_to_private", True),
                 )
-                print(
-                    f"✅  Pushed to https://huggingface.co/{cfg['finetuned_model_id']}"
-                )
-            except Exception as e:
-                warnings.warn(f"Hub push failed: {e}")
+                print(f"✅  Fallback .bin pushed to https://huggingface.co/{cfg['finetuned_model_id']}")
+
+        except Exception as final_err:
+            warnings.warn(f"❌  Final push attempt failed, but training is complete.  Error: {final_err}")
+
 
 
 # ────────────────── utilities ──────────────────
