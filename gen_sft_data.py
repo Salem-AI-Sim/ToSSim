@@ -41,7 +41,7 @@ def convert_trace_to_sft(trace: Dict) -> List[Dict]:
         sft_sample = {
             "messages": [
                 {"role": "user", "content": prompt},
-                {"role": "model", "content": completion}
+                {"role": "assistant", "content": completion}
             ],
             "metadata": {
                 "game_id": game_id,
