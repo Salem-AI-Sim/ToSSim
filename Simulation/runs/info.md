@@ -71,7 +71,7 @@ Schema excerpt that covers **every** research metric currently tracked:
     "times_whispered":                  4,
     "times_waited":                     6,
 
-    "times_nominated":                  2,
+    "times_nominated":                   2,
     "successful_trial_defences":        1,
 
     "invalid_tool_uses":                0,

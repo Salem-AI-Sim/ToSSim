@@ -1,0 +1,22 @@
+{
+  "run_id": "2025-07-18T14-30-22Z-seed1337",
+  "seed": 1337,
+  "game_mode": "All Any",
+  "winner_factions": [
+    "Town"
+  ],
+  "duration_days": 3,
+  "timestamp_utc": "2025-07-18T14:30:22Z",
+  "players": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+  ]
+}

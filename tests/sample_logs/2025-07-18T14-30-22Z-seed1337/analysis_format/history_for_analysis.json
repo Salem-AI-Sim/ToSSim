@@ -1,0 +1,432 @@
+{
+  "game_id": "2025-07-18T14-30-22Z-seed1337",
+  "context": {
+    "total_days": 3,
+    "total_players": 10,
+    "game_summary": "Town victory after 3 days",
+    "final_state": "completed"
+  },
+  "players": {
+    "Alice": {
+      "claimed_role": "Sheriff",
+      "actual_role": "Sheriff",
+      "faction": "Town",
+      "survival_status": "alive",
+      "chat_messages": [
+        {
+          "day": 1,
+          "message": "I'm Sheriff Alice. I'll investigate suspicious players tonight."
+        },
+        {
+          "day": 2,
+          "message": "I investigated Bob last night. He came up as MAFIA! We need to vote him out."
+        },
+        {
+          "day": 3,
+          "message": "Bob is definitely mafia. His defensive behavior confirms it."
+        }
+      ],
+      "actions": [
+        {
+          "day": 1,
+          "action": "investigate",
+          "target": "Bob",
+          "result": "mafia"
+        },
+        {
+          "day": 2,
+          "action": "investigate",
+          "target": "Eve",
+          "result": "mafia"
+        },
+        {
+          "day": 3,
+          "action": "investigate",
+          "target": "Charlie",
+          "result": "town"
+        }
+      ],
+      "votes": [
+        {
+          "day": 2,
+          "target": "Bob",
+          "reasoning": "Alice's investigation shows he's mafia"
+        },
+        {
+          "day": 3,
+          "target": "Eve",
+          "reasoning": "Likely the remaining mafia member"
+        }
+      ],
+      "role_claims": [
+        {
+          "day": 1,
+          "role": "Sheriff",
+          "confidence": "certain"
+        }
+      ]
+    },
+    "Bob": {
+      "claimed_role": "Mafioso",
+      "actual_role": "Mafioso",
+      "faction": "Mafia",
+      "survival_status": "lynched_day_2",
+      "chat_messages": [
+        {
+          "day": 1,
+          "message": "Hi everyone! I'm just a regular citizen."
+        },
+        {
+          "day": 2,
+          "message": "Alice is lying! I'm not mafia, she must be trying to frame me."
+        },
+        {
+          "day": 2,
+          "message": "Why would the sheriff investigate me first? That's suspicious."
+        }
+      ],
+      "actions": [
+        {
+          "day": 1,
+          "action": "kill",
+          "target": "Diana",
+          "result": "successful"
+        }
+      ],
+      "votes": [],
+      "role_claims": [
+        {
+          "day": 1,
+          "role": "Mafioso",
+          "confidence": "certain"
+        }
+      ]
+    },
+    "Charlie": {
+      "claimed_role": "Doctor",
+      "actual_role": "Doctor",
+      "faction": "Town",
+      "survival_status": "alive",
+      "chat_messages": [
+        {
+          "day": 1,
+          "message": "I'm Doctor Charlie. I'll keep everyone healthy."
+        },
+        {
+          "day": 2,
+          "message": "I agree with Alice. Bob's reaction seems guilty."
+        },
+        {
+          "day": 3,
+          "message": "We need to find the remaining mafia members."
+        }
+      ],
+      "actions": [
+        {
+          "day": 1,
+          "action": "heal",
+          "target": "Alice",
+          "result": "successful"
+        },
+        {
+          "day": 2,
+          "action": "heal",
+          "target": "Alice",
+          "result": "successful"
+        },
+        {
+          "day": 3,
+          "action": "heal",
+          "target": "Henry",
+          "result": "successful"
+        }
+      ],
+      "votes": [
+        {
+          "day": 2,
+          "target": "Bob",
+          "reasoning": "Alice's investigation shows he's mafia"
+        },
+        {
+          "day": 3,
+          "target": "Eve",
+          "reasoning": "Likely the remaining mafia member"
+        }
+      ],
+      "role_claims": [
+        {
+          "day": 1,
+          "role": "Doctor",
+          "confidence": "certain"
+        }
+      ]
+    },
+    "Diana": {
+      "claimed_role": "Investigator",
+      "actual_role": "Investigator",
+      "faction": "Town",
+      "survival_status": "killed_day_1",
+      "chat_messages": [
+        {
+          "day": 1,
+          "message": "I'm Diana. Let's find the mafia!"
+        }
+      ],
+      "actions": [],
+      "votes": [],
+      "role_claims": [
+        {
+          "day": 1,
+          "role": "Investigator",
+          "confidence": "certain"
+        }
+      ]
+    },
+    "Eve": {
+      "claimed_role": "Godfather",
+      "actual_role": "Godfather",
+      "faction": "Mafia",
+      "survival_status": "lynched_day_3",
+      "chat_messages": [
+        {
+          "day": 1,
+          "message": "I'm Eve. Let's find the mafia!"
+        },
+        {
+          "day": 2,
+          "message": "I believe Alice's investigation."
+        },
+        {
+          "day": 3,
+          "message": "Good work team!"
+        }
+      ],
+      "actions": [
+        {
+          "day": 2,
+          "action": "kill",
+          "target": "Henry",
+          "result": "blocked"
+        }
+      ],
+      "votes": [
+        {
+          "day": 2,
+          "target": "Alice",
+          "reasoning": "She's obviously lying about being sheriff"
+        }
+      ],
+      "role_claims": [
+        {
+          "day": 1,
+          "role": "Godfather",
+          "confidence": "certain"
+        }
+      ]
+    },
+    "Frank": {
+      "claimed_role": "Bodyguard",
+      "actual_role": "Bodyguard",
+      "faction": "Town",
+      "survival_status": "alive",
+      "chat_messages": [
+        {
+          "day": 1,
+          "message": "I'm Frank. Let's find the mafia!"
+        },
+        {
+          "day": 2,
+          "message": "I believe Alice's investigation."
+        },
+        {
+          "day": 3,
+          "message": "Good work team!"
+        }
+      ],
+      "actions": [
+        {
+          "day": 1,
+          "action": "protect",
+          "target": "Alice",
+          "result": "no_attack"
+        },
+        {
+          "day": 2,
+          "action": "protect",
+          "target": "Alice",
+          "result": "no_attack"
+        },
+        {
+          "day": 3,
+          "action": "protect",
+          "target": "Charlie",
+          "result": "no_attack"
+        }
+      ],
+      "votes": [
+        {
+          "day": 2,
+          "target": "Bob",
+          "reasoning": "Alice's investigation shows he's mafia"
+        },
+        {
+          "day": 3,
+          "target": "Eve",
+          "reasoning": "Likely the remaining mafia member"
+        }
+      ],
+      "role_claims": [
+        {
+          "day": 1,
+          "role": "Bodyguard",
+          "confidence": "certain"
+        }
+      ]
+    },
+    "Grace": {
+      "claimed_role": "Citizen",
+      "actual_role": "Citizen",
+      "faction": "Town",
+      "survival_status": "alive",
+      "chat_messages": [
+        {
+          "day": 1,
+          "message": "I'm Grace. Let's find the mafia!"
+        },
+        {
+          "day": 2,
+          "message": "I believe Alice's investigation."
+        },
+        {
+          "day": 3,
+          "message": "Good work team!"
+        }
+      ],
+      "actions": [],
+      "votes": [
+        {
+          "day": 2,
+          "target": "Bob",
+          "reasoning": "Alice's investigation shows he's mafia"
+        },
+        {
+          "day": 3,
+          "target": "Eve",
+          "reasoning": "Likely the remaining mafia member"
+        }
+      ],
+      "role_claims": [
+        {
+          "day": 1,
+          "role": "Citizen",
+          "confidence": "certain"
+        }
+      ]
+    },
+    "Henry": {
+      "claimed_role": "Veteran",
+      "actual_role": "Veteran",
+      "faction": "Town",
+      "survival_status": "alive",
+      "chat_messages": [
+        {
+          "day": 1,
+          "message": "I'm Henry. Let's find the mafia!"
+        },
+        {
+          "day": 2,
+          "message": "I believe Alice's investigation."
+        },
+        {
+          "day": 3,
+          "message": "Good work team!"
+        }
+      ],
+      "actions": [],
+      "votes": [
+        {
+          "day": 2,
+          "target": "Bob",
+          "reasoning": "Alice's investigation shows he's mafia"
+        },
+        {
+          "day": 3,
+          "target": "Eve",
+          "reasoning": "Likely the remaining mafia member"
+        }
+      ],
+      "role_claims": [
+        {
+          "day": 1,
+          "role": "Veteran",
+          "confidence": "certain"
+        }
+      ]
+    },
+    "Ivy": {
+      "claimed_role": "Consort",
+      "actual_role": "Consort",
+      "faction": "Mafia",
+      "survival_status": "killed_day_2",
+      "chat_messages": [
+        {
+          "day": 1,
+          "message": "I'm Ivy. Let's find the mafia!"
+        },
+        {
+          "day": 2,
+          "message": "I believe Alice's investigation."
+        }
+      ],
+      "actions": [],
+      "votes": [],
+      "role_claims": [
+        {
+          "day": 1,
+          "role": "Consort",
+          "confidence": "certain"
+        }
+      ]
+    },
+    "Jack": {
+      "claimed_role": "Citizen",
+      "actual_role": "Citizen",
+      "faction": "Town",
+      "survival_status": "alive",
+      "chat_messages": [
+        {
+          "day": 1,
+          "message": "I'm Jack. Let's find the mafia!"
+        },
+        {
+          "day": 2,
+          "message": "I believe Alice's investigation."
+        },
+        {
+          "day": 3,
+          "message": "Good work team!"
+        }
+      ],
+      "actions": [],
+      "votes": [
+        {
+          "day": 2,
+          "target": "Bob",
+          "reasoning": "Alice's investigation shows he's mafia"
+        },
+        {
+          "day": 3,
+          "target": "Eve",
+          "reasoning": "Likely the remaining mafia member"
+        }
+      ],
+      "role_claims": [
+        {
+          "day": 1,
+          "role": "Citizen",
+          "confidence": "certain"
+        }
+      ]
+    }
+  }
+}

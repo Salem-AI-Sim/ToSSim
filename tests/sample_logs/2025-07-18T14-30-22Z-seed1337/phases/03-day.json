@@ -1,0 +1,21 @@
+{
+  "phase": "DAY",
+  "counter": 3,
+  "public_events": [
+    "Eve was lynched"
+  ],
+  "alive": [
+    1,
+    3,
+    6,
+    7,
+    8,
+    10
+  ],
+  "graveyard": [
+    2,
+    4,
+    5,
+    9
+  ]
+}

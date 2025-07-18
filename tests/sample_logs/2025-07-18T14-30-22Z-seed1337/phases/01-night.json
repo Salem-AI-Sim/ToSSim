@@ -1,0 +1,21 @@
+{
+  "phase": "NIGHT",
+  "counter": 1,
+  "public_events": [
+    "Diana died (killed by Mafia)"
+  ],
+  "alive": [
+    1,
+    2,
+    3,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+  ],
+  "graveyard": [
+    4
+  ]
+}
