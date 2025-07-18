@@ -98,7 +98,7 @@ __pycache__/
 models/
 checkpoints/
 experiments/**/checkpoints/
-
+!analysis/evaluation/models/ 
 ###############################################################################
 # 4.  Jupyter & VS Code noise
 ###############################################################################
