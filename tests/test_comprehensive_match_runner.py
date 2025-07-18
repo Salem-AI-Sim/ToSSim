@@ -1,836 +1,456 @@
 """
-The World's Largest Town of Salem Test
-=====================================
+README: Comprehensive Town of Salem Simulation Test
 
-This test exercises the ENTIRE ToSSim system end-to-end by:
-1. Using the real MatchRunner and prompting system
-2. Acting as all 15 players with distinct personalities and strategies
-3. Testing complex interactions between roles, factions, and game mechanics
-4. Demonstrating the full scope of the simulation engine
+This file is the gold-standard, human-curated, end-to-end test for the ToSSim environment.
 
-Each player has a unique AI personality that makes strategic decisions based on:
-- Their role and faction
-- The current game state
-- Their relationships with other players
-- Their understanding of the meta-game
+Purpose:
+- Simulate a full 15-player Town of Salem game using hardcoded agent scripts.
+- Provide total coverage of all game mechanics, roles, and agent-environment interactions.
+- Serve as a reference for prompt engineering, agent tool development, and LLM evaluation.
+- Allow step-by-step, human-in-the-loop curation and debugging of agent behavior and environment feedback.
 
-This test proves that the entire system works together correctly.
+How it works:
+- Each agent is assigned a canonical role and a script of actions for each phase.
+- The environment builds and prints the full prompt (system, user, observations) for each agent at every turn.
+- Tool results and environment feedback are injected into the next prompt, just as in a real LLM loop.
+- The test prints all prompts, actions, observations, chat logs, and game state after each phase.
+- You can edit the agent scripts to curate gold-standard behavior, or use this as a testbed for new agent tools.
+
+Usage:
+- Run with pytest or directly as a script to see all output:
+    python -m pytest -s tests/test_comprehensive_match_runner.py
+    python tests/test_comprehensive_match_runner.py
+- Edit agent scripts to add realistic actions, tool calls, and reasoning for each phase.
+- Use this file as a template for new agent tools, chat windows, or evaluation harnesses.
+
+Scope:
+- Covers all roles, tools, and phases in a standard Town of Salem game.
+- Designed for extensibility: add more phases, edge cases, or agent types as needed.
+- Intended for both human and LLM agent development and debugging.
+
 """
 
 import sys
 import os
-import re
-import random
-import json
-from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
-from unittest.mock import Mock, MagicMock
-import pytest
+import argparse
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Add the project root to the Python path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+STEP_MODE = os.environ.get("TOSSIM_STEP") == "1"
 
+from Simulation.grammar import validate_action
+from Simulation.interaction_handler import InteractionHandler
 from Simulation.game import Game
-from Simulation.config import GameConfiguration
 from Simulation.player import Player
-from Simulation.enums import RoleName, Faction, Time, Phase
 from Simulation.roles import create_role_from_name
-from runner.match_runner import MatchRunner, AgentContext
-from runner.lobby_loader import LobbyConfig, GameSpec, AgentSpec
-from inference.engine import InferenceEngine
-from inference.client import InferenceClient
+from Simulation.enums import RoleName, Phase
+from Simulation.config import GameConfiguration
+from Simulation.prompt_builder import build_complete_prompt, build_user_prompt
 
+class ScriptedAgent:
+    def __init__(self, script):
+        self.script = script
+        self.turn = 0
 
-class MockInferenceEngine:
-    """Mock inference engine that allows us to control all player responses."""
-    
-    def __init__(self):
-        self.agents = {}
-        self.lanes = {}
-        self.player_ais = {}
-        
-    def register_agent(self, agent_id: str, model_name: str) -> tuple[str, str]:
-        """Register an agent and return (agent_id, lane_url)."""
-        lane_url = f"http://mock-lane-{agent_id}"
-        self.agents[agent_id] = model_name
-        self.lanes[agent_id] = lane_url
-        return agent_id, lane_url
-        
-    def release_agent(self, agent_id: str):
-        """Release an agent."""
-        self.agents.pop(agent_id, None)
-        self.lanes.pop(agent_id, None)
-        
-    def set_player_ai(self, agent_id: str, ai_function):
-        """Set the AI function for a specific player."""
-        self.player_ais[agent_id] = ai_function
+    def respond(self, observation, prompt):
+        if self.turn < len(self.script):
+            output = self.script[self.turn]
+            self.turn += 1
+            return output
+        return "<think>No action</think><wait/>"
 
+def print_game_state(game, phase_label):
+    print(f"\n--- {phase_label} GAME STATE ---")
+    print("Alive players:")
+    for p in game.players:
+        if p.is_alive:
+            print(f"  {p.name} ({p.role.name.value})")
+    print("Dead players:")
+    for p in game.players:
+        if not p.is_alive:
+            print(f"  {p.name} ({p.role.name.value})")
+    print("-----------------------------\n")
 
-class MockInferenceClient:
-    """Mock inference client that uses our hardcoded AI responses."""
-    
-    def __init__(self, lane_url: str, model_name: str, engine: MockInferenceEngine):
-        self.lane_url = lane_url
-        self.model_name = model_name
-        self.engine = engine
-        self.agent_id = None
-        
-        # Extract agent ID from lane URL
-        if "mock-lane-" in lane_url:
-            self.agent_id = lane_url.split("mock-lane-")[1]
-            
-    def chat(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
-        """Generate a response using our hardcoded AI."""
-        if self.agent_id and self.agent_id in self.engine.player_ais:
-            ai_func = self.engine.player_ais[self.agent_id]
-            response_text = ai_func(messages)
-        else:
-            response_text = "<wait/>"
-            
-        return {
-            "choices": [{
-                "message": {
-                    "content": response_text
-                }
-            }]
-        }
+def print_chat_log(game, phase_label):
+    print(f"\n--- {phase_label} CHAT LOG ---")
+    for msg in game.chat.history:
+        print(msg)
+    print("-----------------------------\n")
 
+def run_scripted_game(scripted_agents, game: Game, phase_label="", args=None, observations=None):
+    handler = InteractionHandler(game)
+    if observations is None:
+        observations = {name: "" for name in scripted_agents}
 
-class PlayerAI:
-    """Base class for player AI personalities."""
-    
-    def __init__(self, name: str, role: RoleName, faction: Faction):
-        self.name = name
-        self.role = role
-        self.faction = faction
-        self.memory = {}
-        self.turn_count = 0
-        self.suspicions = {}  # player_name -> suspicion_level (0-10)
-        self.trust = {}       # player_name -> trust_level (0-10)
-        self.knowledge = {}   # what this player knows about others
+    for player in game.players:
+        if not player.is_alive:
+            continue
+        agent = scripted_agents[player.name]
         
-    def respond(self, messages: List[Dict[str, str]]) -> str:
-        """Generate a response based on the message history."""
-        self.turn_count += 1
-        
-        # Extract the latest prompt
-        latest_message = messages[-1]['content'] if messages else ""
-        
-        # Parse game state from the prompt
-        game_state = self._parse_game_state(latest_message)
-        
-        # Generate response based on role and game state
-        return self._generate_response(game_state, messages)
-        
-    def _parse_game_state(self, prompt: str) -> Dict[str, Any]:
-        """Parse game state information from the prompt."""
-        state = {
-            'day': 0,
-            'phase': 'unknown',
-            'graveyard': [],
-            'nominations': [],
-            'chat_history': [],
-            'alive_players': [],
-        }
-        
-        # Extract day number
-        day_match = re.search(r'Day (\d+)', prompt)
-        if day_match:
-            state['day'] = int(day_match.group(1))
-            
-        # Extract phase
-        phase_match = re.search(r'Day \d+ — (\w+)', prompt)
-        if phase_match:
-            state['phase'] = phase_match.group(1).lower()
-            
-        # Extract graveyard
-        graveyard_section = re.search(r'Graveyard:\n(.*?)(?=\n\n|\nNominations|\nRecent chat|$)', prompt, re.DOTALL)
-        if graveyard_section:
-            for line in graveyard_section.group(1).split('\n'):
-                if '—' in line:
-                    name, role = line.split('—', 1)
-                    state['graveyard'].append({
-                        'name': name.strip('• ').strip(),
-                        'role': role.strip()
-                    })
-                    
-        # Extract nominations
-        nominations_section = re.search(r'Nominations.*?:\n(.*?)(?=\n\n|\nRecent chat|$)', prompt, re.DOTALL)
-        if nominations_section:
-            for line in nominations_section.group(1).split('\n'):
-                if ':' in line:
-                    name, votes = line.split(':', 1)
-                    state['nominations'].append({
-                        'name': name.strip('• ').strip(),
-                        'votes': votes.strip()
-                    })
-                    
-        # Extract chat history
-        chat_section = re.search(r'Recent chat:\n(.*?)$', prompt, re.DOTALL)
-        if chat_section:
-            for line in chat_section.group(1).split('\n'):
-                if line.strip():
-                    state['chat_history'].append(line.strip())
-                    
-        return state
-        
-    def _generate_response(self, game_state: Dict[str, Any], messages: List[Dict[str, str]]) -> str:
-        """Generate a response based on game state and role."""
-        # Default behavior - subclasses should override
-        return "<wait/>"
-        
-    def _update_suspicions(self, player_name: str, change: int):
-        """Update suspicion level for a player."""
-        if player_name not in self.suspicions:
-            self.suspicions[player_name] = 5  # neutral
-        self.suspicions[player_name] = max(0, min(10, self.suspicions[player_name] + change))
-        
-    def _update_trust(self, player_name: str, change: int):
-        """Update trust level for a player."""
-        if player_name not in self.trust:
-            self.trust[player_name] = 5  # neutral
-        self.trust[player_name] = max(0, min(10, self.trust[player_name] + change))
+        is_placeholder = agent.script and "Placeholder for" in agent.script[0]
+        if args and args.hardcoded_only and is_placeholder:
+            continue
 
+        while True:
+            observation = observations.get(player.name, "")
+            orig_day = game.day
+            if orig_day == 0:
+                game.day = 1
+            prompt = build_complete_prompt(game, player)
+            if observation:
+                prompt += f"\n<observation>{observation}</observation>"
+            
+            if not (args and args.hide_inputs):
+                if args and args.obfuscate_prompt:
+                    print(f"\n[{player.name}] Prompt (obfuscated).")
+                else:
+                    print(f"\n[{player.name}] SYSTEM+USER PROMPT:\n{prompt}")
 
-class TownInvestigativeAI(PlayerAI):
-    """AI for Town Investigative roles (Sheriff, Investigator, Lookout, etc.)."""
-    
-    def _generate_response(self, game_state: Dict[str, Any], messages: List[Dict[str, str]]) -> str:
-        phase = game_state['phase']
-        day = game_state['day']
-        
-        if phase == 'night':
-            # During night, use investigative abilities
-            if self.role == RoleName.SHERIFF:
-                return self._sheriff_night_action(game_state)
-            elif self.role == RoleName.INVESTIGATOR:
-                return self._investigator_night_action(game_state)
-            elif self.role == RoleName.LOOKOUT:
-                return self._lookout_night_action(game_state)
-            elif self.role == RoleName.SPY:
-                return self._spy_night_action(game_state)
-                
-        elif phase == 'discussion':
-            # During day discussion, share information and build cases
-            return self._discussion_response(game_state)
+            agent_output = agent.respond(observation, prompt)
             
-        elif phase == 'nomination':
-            # During nomination, vote for suspicious players
-            return self._nomination_response(game_state)
-            
-        elif phase == 'judgement':
-            # During judgement, vote based on evidence
-            return self._judgement_response(game_state)
-            
-        return "<wait/>"
-        
-    def _sheriff_night_action(self, game_state: Dict[str, Any]) -> str:
-        """Sheriff night action - investigate suspicious players."""
-        # Find most suspicious player who isn't dead
-        dead_players = {p['name'] for p in game_state['graveyard']}
-        suspicious_players = [name for name, level in self.suspicions.items() 
-                            if level > 6 and name not in dead_players and name != self.name]
-        
-        if suspicious_players:
-            target = max(suspicious_players, key=lambda x: self.suspicions[x])
-            return f"<investigate>{target}</investigate>"
-        
-        # If no suspicious players, investigate randomly
-        return "<investigate>Player2</investigate>"
-        
-    def _investigator_night_action(self, game_state: Dict[str, Any]) -> str:
-        """Investigator night action - get detailed role information."""
-        # Similar to sheriff but get more detailed info
-        dead_players = {p['name'] for p in game_state['graveyard']}
-        unknown_players = [name for name in ['Player1', 'Player2', 'Player3', 'Player4', 'Player5'] 
-                          if name not in dead_players and name != self.name 
-                          and name not in self.knowledge]
-        
-        if unknown_players:
-            target = random.choice(unknown_players)
-            return f"<investigate>{target}</investigate>"
-            
-        return "<investigate>Player2</investigate>"
-        
-    def _lookout_night_action(self, game_state: Dict[str, Any]) -> str:
-        """Lookout night action - watch for visits."""
-        # Watch suspicious or important players
-        important_players = ['Player1', 'Player2', 'Player3']  # Could be claimed important roles
-        dead_players = {p['name'] for p in game_state['graveyard']}
-        
-        targets = [name for name in important_players 
-                  if name not in dead_players and name != self.name]
-        
-        if targets:
-            target = random.choice(targets)
-            return f"<watch>{target}</watch>"
-            
-        return "<watch>Player2</watch>"
-        
-    def _spy_night_action(self, game_state: Dict[str, Any]) -> str:
-        """Spy night action - bug for information."""
-        # Bug potentially suspicious players
-        suspicious_players = [name for name, level in self.suspicions.items() 
-                            if level > 5 and name != self.name]
-        
-        if suspicious_players:
-            target = random.choice(suspicious_players)
-            return f"<bug>{target}</bug>"
-            
-        return "<bug>Player2</bug>"
-        
-    def _discussion_response(self, game_state: Dict[str, Any]) -> str:
-        """Respond during discussion phase."""
-        # Share information if we have any
-        if self.turn_count % 3 == 0:  # Don't talk every turn
-            if self.role == RoleName.SHERIFF:
-                return f"<speak>I'm Sheriff. I've been investigating suspicious players. Stay alert town!</speak>"
-            elif self.role == RoleName.INVESTIGATOR:
-                return f"<speak>I have some leads on player roles. Let's discuss who seems suspicious.</speak>"
-            elif self.role == RoleName.LOOKOUT:
-                return f"<speak>I've been watching key players. Some interesting visits happened last night.</speak>"
-                
-        return "<wait/>"
-        
-    def _nomination_response(self, game_state: Dict[str, Any]) -> str:
-        """Respond during nomination phase."""
-        # Nominate most suspicious player
-        suspicious_players = [name for name, level in self.suspicions.items() 
-                            if level > 7 and name != self.name]
-        
-        if suspicious_players and random.random() < 0.3:  # 30% chance to nominate
-            target = max(suspicious_players, key=lambda x: self.suspicions[x])
-            return f"<nominate>{target}</nominate>"
-            
-        return "<wait/>"
-        
-    def _judgement_response(self, game_state: Dict[str, Any]) -> str:
-        """Respond during judgement phase."""
-        # Vote guilty on suspicious players, innocent on trusted ones
-        # This is simplified - in real game would need to know who's on trial
-        if random.random() < 0.6:
-            return "<vote>GUILTY</vote>"
-        else:
-            return "<vote>INNOCENT</vote>"
+            # If agent only thinks, append a wait action
+            if "<think>" in agent_output and not any(tag in agent_output for tag in handler.interaction_tags):
+                agent_output += "<wait/>"
 
-
-class TownProtectiveAI(PlayerAI):
-    """AI for Town Protective roles (Doctor, Bodyguard, etc.)."""
-    
-    def _generate_response(self, game_state: Dict[str, Any], messages: List[Dict[str, str]]) -> str:
-        phase = game_state['phase']
-        
-        if phase == 'night':
-            if self.role == RoleName.DOCTOR:
-                return self._doctor_night_action(game_state)
-            elif self.role == RoleName.BODYGUARD:
-                return self._bodyguard_night_action(game_state)
-            elif self.role == RoleName.CRUSADER:
-                return self._crusader_night_action(game_state)
-                
-        elif phase == 'discussion':
-            return self._protective_discussion(game_state)
-            
-        elif phase == 'nomination':
-            return self._protective_nomination(game_state)
-            
-        elif phase == 'judgement':
-            return self._protective_judgement(game_state)
-            
-        return "<wait/>"
-        
-    def _doctor_night_action(self, game_state: Dict[str, Any]) -> str:
-        """Doctor night action - heal important players."""
-        # Protect claimed important roles or trusted players
-        important_players = ['Player1', 'Player2', 'Player3']
-        dead_players = {p['name'] for p in game_state['graveyard']}
-        
-        targets = [name for name in important_players 
-                  if name not in dead_players and name != self.name]
-        
-        if targets:
-            # Protect most trusted player
-            target = max(targets, key=lambda x: self.trust.get(x, 5))
-            return f"<protect>{target}</protect>"
-            
-        return "<protect>Player2</protect>"
-        
-    def _bodyguard_night_action(self, game_state: Dict[str, Any]) -> str:
-        """Bodyguard night action - protect and potentially counter-attack."""
-        # Similar to doctor but more aggressive
-        return self._doctor_night_action(game_state)
-        
-    def _crusader_night_action(self, game_state: Dict[str, Any]) -> str:
-        """Crusader night action - protect with killing potential."""
-        return self._doctor_night_action(game_state)
-        
-    def _protective_discussion(self, game_state: Dict[str, Any]) -> str:
-        """Discussion for protective roles."""
-        if self.turn_count % 4 == 0:  # Speak less frequently
-            return f"<speak>I'm trying to keep important town members safe. Let's focus on finding scum.</speak>"
-        return "<wait/>"
-        
-    def _protective_nomination(self, game_state: Dict[str, Any]) -> str:
-        """Nomination for protective roles."""
-        # Conservative with nominations
-        if random.random() < 0.2:  # 20% chance to nominate
-            suspicious_players = [name for name, level in self.suspicions.items() 
-                                if level > 8 and name != self.name]
-            if suspicious_players:
-                target = random.choice(suspicious_players)
-                return f"<nominate>{target}</nominate>"
-        return "<wait/>"
-        
-    def _protective_judgement(self, game_state: Dict[str, Any]) -> str:
-        """Judgement for protective roles."""
-        # Usually vote with town consensus
-        if random.random() < 0.5:
-            return "<vote>GUILTY</vote>"
-        else:
-            return "<vote>INNOCENT</vote>"
-
-
-class MafiaAI(PlayerAI):
-    """AI for Mafia roles."""
-    
-    def _generate_response(self, game_state: Dict[str, Any], messages: List[Dict[str, str]]) -> str:
-        phase = game_state['phase']
-        
-        if phase == 'night':
-            if self.role == RoleName.GODFATHER:
-                return self._godfather_night_action(game_state)
-            elif self.role == RoleName.MAFIOSO:
-                return self._mafioso_night_action(game_state)
-            elif self.role == RoleName.CONSIGLIERE:
-                return self._consigliere_night_action(game_state)
-            elif self.role == RoleName.CONSORT:
-                return self._consort_night_action(game_state)
-                
-        elif phase == 'discussion':
-            return self._mafia_discussion(game_state)
-            
-        elif phase == 'nomination':
-            return self._mafia_nomination(game_state)
-            
-        elif phase == 'judgement':
-            return self._mafia_judgement(game_state)
-            
-        return "<wait/>"
-        
-    def _godfather_night_action(self, game_state: Dict[str, Any]) -> str:
-        """Godfather night action - order kills."""
-        # Target town investigative roles first, then protective
-        priority_targets = ['Player1', 'Player2', 'Player3']  # Likely town roles
-        dead_players = {p['name'] for p in game_state['graveyard']}
-        
-        targets = [name for name in priority_targets 
-                  if name not in dead_players and name != self.name]
-        
-        if targets:
-            target = random.choice(targets)
-            return f"<kill>{target}</kill>"
-            
-        return "<kill>Player2</kill>"
-        
-    def _mafioso_night_action(self, game_state: Dict[str, Any]) -> str:
-        """Mafioso night action - carry out kills if no Godfather."""
-        # Usually pass if Godfather is alive
-        return "<pass/>"
-        
-    def _consigliere_night_action(self, game_state: Dict[str, Any]) -> str:
-        """Consigliere night action - investigate for mafia."""
-        # Investigate to find town power roles
-        unknown_players = [name for name in ['Player1', 'Player2', 'Player3', 'Player4', 'Player5'] 
-                          if name != self.name and name not in self.knowledge]
-        
-        if unknown_players:
-            target = random.choice(unknown_players)
-            return f"<investigate>{target}</investigate>"
-            
-        return "<investigate>Player2</investigate>"
-        
-    def _consort_night_action(self, game_state: Dict[str, Any]) -> str:
-        """Consort night action - roleblock threats."""
-        # Roleblock likely town power roles
-        threat_players = ['Player1', 'Player2', 'Player3']
-        dead_players = {p['name'] for p in game_state['graveyard']}
-        
-        targets = [name for name in threat_players 
-                  if name not in dead_players and name != self.name]
-        
-        if targets:
-            target = random.choice(targets)
-            return f"<distract>{target}</distract>"
-            
-        return "<distract>Player2</distract>"
-        
-    def _mafia_discussion(self, game_state: Dict[str, Any]) -> str:
-        """Mafia discussion - blend in and deflect."""
-        if self.turn_count % 5 == 0:  # Speak occasionally to blend in
-            deflection_targets = [name for name, level in self.suspicions.items() 
-                                if level < 3 and name != self.name]  # Innocent players to blame
-            
-            if deflection_targets:
-                target = random.choice(deflection_targets)
-                return f"<speak>{target} has been acting suspicious. We should keep an eye on them.</speak>"
+            print(f"[{player.name}] Output: {agent_output}")
+            status, error_code, detail = validate_action(agent_output, game, player)
+            if status == "OK":
+                results = handler.parse_and_execute(player, agent_output)
+                observation = results[0] if results else ""
             else:
-                return f"<speak>We need to find the mafia quickly. They're probably staying quiet.</speak>"
-                
-        return "<wait/>"
-        
-    def _mafia_nomination(self, game_state: Dict[str, Any]) -> str:
-        """Mafia nomination - push town lynches."""
-        # Nominate town players, especially power roles
-        town_targets = [name for name, level in self.suspicions.items() 
-                       if level < 4 and name != self.name]  # Likely town
-        
-        if town_targets and random.random() < 0.4:  # 40% chance to nominate
-            target = random.choice(town_targets)
-            return f"<nominate>{target}</nominate>"
+                observation = f"ERROR: {detail}"
+            print(f"[{player.name}] Observation: {observation}\n")
             
-        return "<wait/>"
+            observations[player.name] = observation
+            game.day = orig_day
+            
+            # Break loop if a terminal action was taken
+            if any(tag in agent_output for tag in handler.interaction_tags):
+                break
         
-    def _mafia_judgement(self, game_state: Dict[str, Any]) -> str:
-        """Mafia judgement - vote to lynch town."""
-        # Usually vote guilty on town, innocent on mafia
-        if random.random() < 0.7:  # 70% chance to vote guilty (assume target is town)
-            return "<vote>GUILTY</vote>"
-        else:
-            return "<vote>INNOCENT</vote>"
+        if STEP_MODE:
+            input("Press Enter to continue to the next agent...")
 
+    print_chat_log(game, phase_label)
+    print_game_state(game, phase_label)
+    if STEP_MODE:
+        input(f"Press Enter to continue to the next phase ({phase_label})...")
+    return observations
 
-class NeutralAI(PlayerAI):
-    """AI for Neutral roles."""
-    
-    def _generate_response(self, game_state: Dict[str, Any], messages: List[Dict[str, str]]) -> str:
-        phase = game_state['phase']
-        
-        if phase == 'night':
-            if self.role == RoleName.SERIAL_KILLER:
-                return self._serial_killer_night_action(game_state)
-            elif self.role == RoleName.ARSONIST:
-                return self._arsonist_night_action(game_state)
-            elif self.role == RoleName.SURVIVOR:
-                return self._survivor_night_action(game_state)
-            elif self.role == RoleName.JESTER:
-                return self._jester_night_action(game_state)
-                
-        elif phase == 'discussion':
-            return self._neutral_discussion(game_state)
-            
-        elif phase == 'nomination':
-            return self._neutral_nomination(game_state)
-            
-        elif phase == 'judgement':
-            return self._neutral_judgement(game_state)
-            
-        return "<wait/>"
-        
-    def _serial_killer_night_action(self, game_state: Dict[str, Any]) -> str:
-        """Serial Killer night action - kill everyone."""
-        # Kill anyone who isn't us
-        potential_targets = ['Player1', 'Player2', 'Player3', 'Player4', 'Player5']
-        dead_players = {p['name'] for p in game_state['graveyard']}
-        
-        targets = [name for name in potential_targets 
-                  if name not in dead_players and name != self.name]
-        
-        if targets:
-            target = random.choice(targets)
-            return f"<kill>{target}</kill>"
-            
-        return "<kill>Player2</kill>"
-        
-    def _arsonist_night_action(self, game_state: Dict[str, Any]) -> str:
-        """Arsonist night action - douse or ignite."""
-        # Douse players for a few nights, then ignite
-        if game_state['day'] > 3 and random.random() < 0.3:  # 30% chance to ignite after day 3
-            return "<douse>Player1</douse>"  # Self-target to ignite
-        else:
-            # Douse someone new
-            potential_targets = ['Player1', 'Player2', 'Player3', 'Player4', 'Player5']
-            dead_players = {p['name'] for p in game_state['graveyard']}
-            
-            targets = [name for name in potential_targets 
-                      if name not in dead_players and name != self.name]
-            
-            if targets:
-                target = random.choice(targets)
-                return f"<douse>{target}</douse>"
-                
-        return "<douse>Player2</douse>"
-        
-    def _survivor_night_action(self, game_state: Dict[str, Any]) -> str:
-        """Survivor night action - vest up."""
-        # Use vest if we feel threatened
-        if game_state['day'] > 1 and random.random() < 0.5:  # 50% chance to vest
-            return "<vest/>"
-        return "<wait/>"
-        
-    def _jester_night_action(self, game_state: Dict[str, Any]) -> str:
-        """Jester night action - do nothing."""
-        return "<wait/>"
-        
-    def _neutral_discussion(self, game_state: Dict[str, Any]) -> str:
-        """Neutral discussion - survive and achieve win condition."""
-        if self.role == RoleName.JESTER:
-            # Jester wants to be lynched
-            if self.turn_count % 3 == 0:
-                return f"<speak>I'm definitely not suspicious at all. You should totally trust me.</speak>"
-                
-        elif self.role == RoleName.SURVIVOR:
-            # Survivor wants to blend in
-            if self.turn_count % 6 == 0:
-                return f"<speak>I'm just trying to survive here. Let's find the real threats.</speak>"
-                
-        elif self.role in [RoleName.SERIAL_KILLER, RoleName.ARSONIST]:
-            # Neutral killers blend in
-            if self.turn_count % 4 == 0:
-                return f"<speak>We need to work together to find the mafia. I'm with town on this.</speak>"
-                
-        return "<wait/>"
-        
-    def _neutral_nomination(self, game_state: Dict[str, Any]) -> str:
-        """Neutral nomination strategy."""
-        if self.role == RoleName.JESTER:
-            # Don't nominate others, want to be nominated
-            return "<wait/>"
-            
-        # Other neutrals nominate to blend in
-        if random.random() < 0.25:  # 25% chance to nominate
-            potential_targets = ['Player1', 'Player2', 'Player3', 'Player4', 'Player5']
-            targets = [name for name in potential_targets if name != self.name]
-            
-            if targets:
-                target = random.choice(targets)
-                return f"<nominate>{target}</nominate>"
-                
-        return "<wait/>"
-        
-    def _neutral_judgement(self, game_state: Dict[str, Any]) -> str:
-        """Neutral judgement strategy."""
-        if self.role == RoleName.JESTER:
-            # Vote randomly to seem unhelpful
-            return f"<vote>{random.choice(['GUILTY', 'INNOCENT', 'ABSTAIN'])}</vote>"
-            
-        # Other neutrals vote to blend in
-        if random.random() < 0.6:
-            return "<vote>GUILTY</vote>"
-        else:
-            return "<vote>INNOCENT</vote>"
+def test_hardcoded_town_of_salem_game():
+    parser = argparse.ArgumentParser(description="Run a scripted Town of Salem game with verbosity options.")
+    parser.add_argument("--hide-inputs", action="store_true", help="Do not print agent prompts (inputs).")
+    parser.add_argument("--obfuscate-prompt", action="store_true", help="Print a placeholder instead of the full prompt.")
+    parser.add_argument("--hardcoded-only", action="store_true", help="Only show output for agents with hardcoded scripts.")
+    args, _ = parser.parse_known_args()
 
-
-def create_comprehensive_lobby() -> LobbyConfig:
-    """Create a comprehensive lobby with diverse roles and interesting interactions."""
-    
-    # Design the ultimate role list for maximum chaos and interaction
-    role_assignments = [
-        # Town Block (8 players)
-        ("Alice", RoleName.SHERIFF, "aligned"),
-        ("Bob", RoleName.INVESTIGATOR, "aligned"),
-        ("Charlie", RoleName.DOCTOR, "aligned"),
-        ("Diana", RoleName.BODYGUARD, "aligned"),
-        ("Eve", RoleName.VIGILANTE, "aligned"),
-        ("Frank", RoleName.LOOKOUT, "aligned"),
-        ("Grace", RoleName.JAILOR, "aligned"),
-        ("Henry", RoleName.MAYOR, "aligned"),
-        
-        # Mafia Block (3 players)
-        ("Igor", RoleName.GODFATHER, "misaligned"),
-        ("Jane", RoleName.MAFIOSO, "misaligned"),
-        ("Kevin", RoleName.CONSIGLIERE, "misaligned"),
-        
-        # Neutral Block (4 players)
-        ("Luna", RoleName.SERIAL_KILLER, "misaligned"),
-        ("Mason", RoleName.ARSONIST, "misaligned"),
-        ("Nina", RoleName.JESTER, "misaligned"),  # Wants to be lynched
-        ("Oscar", RoleName.SURVIVOR, "aligned"),   # Just wants to survive
+    # --- Define scripts for Day 1 Discussion and Night 1 ---
+    alice_script = [
+        # Day 1 Discussion
+        "<think>It's day 1 and no one has spoken yet. As the Sheriff my goal is to help the Town find threats, but I have no information yet. It's usually good to encourage discussion to get people talking, which can help spot suspicious behavior later, I should not reveal my role yet, but I can break the ice with a friendly message.</think><speak>Good Morning, everyone! Let's have a productive discussion, who is the Jailor so we can get bg/doc/spy on them?</speak>",
+        # Night 1
+        "<think>I will investigate Bob tonight.</think><investigate>Bob</investigate>",
     ]
-    
-    agents = []
-    for name, role, alignment in role_assignments:
-        misaligned = (alignment == "misaligned")
-        model_name = f"ToSSim/{'misaligned' if misaligned else 'aligned'}-{role.value.lower().replace(' ', '-')}"
-        
-        agents.append(AgentSpec(
-            id=name,
-            model=model_name,
-            quantization="8bit",
-            misaligned=misaligned,
-            personality="strategic",
-            role=role.value,
-            faction=role.name  # This gets overridden by the game
-        ))
-    
-    return LobbyConfig(
-        game=GameSpec(mode="Custom All Any", coven=False),
-        agents=agents
-    )
+    bob_script = [
+        # Day 1 Discussion
+        "<think>It's Day 1. Alice just encouraged discussion and asked for the Jailor to claim so Town Protectives and Lookouts can coordinate. As the Doctor, my best move is to stay silent and not draw any attention to myself. If the Jailor claims, I will heal him at night. For now, I will wait and observe.</think><wait/>",
+        # Night 1
+        "<think>I will guard Eve tonight, since she claimed Jailor.</think><protect>Eve</protect>",
+    ]
+    charlie_script = [
+        # Day 1 Discussion
+        "<think>It's Day 1. Only Alice has spoken so far, encouraging discussion and asking for the Jailor to claim.</think><wait/>",
+        # Night 1
+        "<think>I'm in jail. I need to convince the Jailor I'm a town member. I'll claim my role.</think><speak>Hey Jailor, I'm the Investigator. I can help the town.</speak>",
+    ]
+    diana_script = [
+        # Day 1 Discussion
+        "<think>Alice is encouraging the Jailor to reveal. I want to remind myself of the Jailor's abilities and importance, so I will look up the Jailor's role details</think><roles>Jailor</roles>",
+        "<think>The Jailor is a powerful town role and a key target for protection. Alice is correct if Jailor reveals, I should protect them tonight to keep them safe from evil roles. I will wait for now and watch for the Jailor's claim</think><wait/>",
+        # Night 1
+        "<think>I will guard Eve tonight, since she claimed Jailor.</think><protect>Eve</protect>",
+    ]
+    eve_script = [
+        # Day 1 Discussion
+        "<think>Alice has requested that the Jailor come out to the town to recieve protection I will do so.</think><speak>I am Jailor TP/LO on me</speak>",
+        "<think>Now that I have revealed, I will jail Charlie to interrogate him.</think><jail>Charlie</jail>",
+        # Night 1
+        "<think>Charlie is claiming Investigator in jail. It's a common claim, but I can't risk executing a town member on Night 1. I'll let him live for now.</think>",
+    ]
+    frank_script = [
+        # Day 1
+        "<think>Alice is encouraging the Jailor to reveal. Eve has now claimed Jailor. This is a key piece of information. I should record Eve's claim in my notebook.</think><notebook>Eve claimed Jailor D1 after Alice's request. I should watch Eve tonight to confirm if she is the real Jailor by seeing who visits her.</notebook>",
+        # Night 1
+        "<think>Now it is night. I will watch Eve, who claimed Jailor, to see who visits her. This will help confirm if she is the Jailor and who the Town Protective roles are, or if any evil roles target her.</think><watch>Eve</watch>",
+    ]
+    grace_script = [
+        # Day 1 Discussion
+        "<think>The Jailor has revealed themselves, which is a bold move. As Mayor, I am also a very important town role. Revealing now would split the town's protective roles and draw a lot of attention. It's better to stay quiet for now and let the Jailor be the focus.</think><speak>A Jailor claim on Day 1! Interesting. Town, let's make sure to protect them.</speak>",
+        # Night 1
+        "<think>I have no night action.</think>",
+    ]
+    henry_script = [
+        # Day 1 Discussion
+        "<think>It is Day 1. The game has just begun, and players are starting to talk. As the Godfather, my priority is to remain unnoticed and observe the town's initial reactions. I should avoid any actions that might draw attention or reveal my alignment. My best strategy is to stay quiet, listen to the discussions, and gather information about potential threats or allies.</think><wait/>",
+        # Night 1
+        "<think>It's the first night. I need to establish control of the Mafia and choose a target. Grace has been quiet and could be a high-value town role.</think><speak>Alright team, let's get to work. I think we should target Grace.</speak>",
+        "<think>Igor and Jane have agreed. I will now issue the kill order.</think><kill>Grace</kill>",
+    ]
+    igor_script = [
+        # Day 1 Discussion
+        "<think>It is Day 1. Alice has started the discussion, and Eve has claimed Jailor. The chat has been quiet for a bit. As a Mafioso, I need to blend in and avoid suspicion. I will say something random to appear active and cooperative, without revealing anything or making strong accusations. This helps me seem like a normal Town member.</think><speak>Interesting start! Let's try to figure out who's who.</speak>",
+        # Night 1
+        "<think>The Godfather has spoken. I will follow his lead.</think><speak>Sounds good to me, boss.</speak>",
+    ]
+    jane_script = [
+        # Day 1 Discussion
+        "<think>It is Day 1. Alice has initiated discussion, Eve has claimed Jailor, and Igor has made a general comment. As the Consigliere, my role is to gather information for the Mafia. I need to appear as a cooperative Town member. I will ask a general question to encourage more players to speak, which might reveal useful information or roles.</think><speak>Good points so far. Any survivor claims?</speak>",
+        # Night 1
+        "<think>I agree with the Godfather's plan. I'll investigate Alice to see what her role is, since she was the first to speak.</think><speak>I'm on board. I'll check out Alice.</speak><investigate>Alice</investigate>",
+    ]
+    kevin_script = [
+        # Day 1 Discussion
+        "<think>It is Day 1. The discussion has started, and Eve has claimed Jailor. As a Serial Killer, my goal is to eliminate all who would oppose me. I need to appear as a normal Town member to avoid suspicion. I will make a general, non-committal statement to participate without revealing anything. This helps me blend in.</think><speak>Alright, let's get this discussion going and find some evil!</speak>",
+        # Night 1
+        "<think>Time to get my hands dirty. Henry has been quiet. He's my target.</think><kill>Henry</kill>",
+    ]
+    luna_script = [
+        # Day 1 Discussion
+        "<think>It is Day 1. The discussion has started. As an Arsonist, my goal is to douse and eventually ignite the town. I need to appear as a harmless Town member. I will make a simple, friendly statement to participate without drawing suspicion. This helps me blend in and observe.</think><speak>Good morning! Hope we can work together to find the bad guys.</speak>",
+        # Night 1
+        "<think>I'll start by dousing Igor. He'll never see it coming.</think><douse>Igor</douse>",
+    ]
+    mona_script = [
+        # Day 1 Discussion
+        "<think>It is Day 1. The discussion has begun, and Eve has claimed Jailor. As an Executioner, my goal is to get my target lynched. I need to appear as a helpful Town member, but also subtly encourage lynching. I will make a general statement to push for action, without revealing my true intentions.</think><speak>Alright Town, let's not waste time. Who are we looking at today?</speak>",
+        # Night 1
+        "<think>My target is Alice. I need to find a way to get the town to lynch her. I have no night action, so I'll just wait and see what happens.</think>",
+    ]
+    nina_script = [
+        # Day 1 Discussion
+        "<think>It is Day 1. The discussion is underway. As a Jester, my goal is to get lynched by the Town. I need to draw attention to myself, but not in an overtly evil way. I will make a slightly quirky or random comment to stand out and encourage people to look at me.</think><speak>Wow, this is exciting! Who's everyone's top suspect so far? I'm just here for the drama!</speak>",
+        # Night 1
+        "<think>I need to act suspicious to get lynched. But I have no night action. I'll just wait for now.</think>",
+    ]
+    oscar_script = [
+        # Day 1 Discussion
+        "<think>It is Day 1. The discussion has started. As a Survivor, my goal is to stay alive until the end of the game. I need to appear neutral and non-threatening to all factions. I will state my role's objective clearly to avoid being targeted by anyone.</think><speak>Hey everyone, I'm just a simple Survivor. I'm not here to cause trouble, just trying to make it to the end.</speak>",
+        # Night 1
+        "<think>Night 1 is always dangerous. I'll use a vest to be safe.</think><vest/>",
+    ]
 
+    # Append Day 2 and Night 2 phases for each agent
+    alice_script += [
+        # Day 2 Discussion
+        "<think>It's Day 2. No one was put on trial yesterday. I'll encourage more discussion to see if anyone slips up.</think><speak>We need more info. Did anyone see anything suspicious last night?</speak>",
+        # Day 2 Nomination
+        "<think>Still not enough info. I'll wait to see who gets nominated.</think><wait/>",
+        # Day 2 Defense
+        "<think>I'm not on trial, so I'll observe the defense.</think><wait/>",
+        # Day 2 Judgement
+        "<think>I don't have enough info to vote guilty. I'll vote innocent.</think><vote>innocent</vote>",
+        # Day 2 Last Words
+        "<think>I'm not on trial, so nothing to say.</think><wait/>",
+        # Day 2 Pre-Night
+        "<think>Preparing for night. I'll review my notes.</think><wait/>",
+        # Night 2
+        "<think>I will investigate Grace tonight.</think><investigate>Grace</investigate>",
+    ]
+    bob_script += [
+        "<think>Day 2. Eve survived the night, so my heal was successful or she wasn't attacked. I'll keep quiet and see if anyone claims attacked.</think><wait/>",
+        "<think>Nomination phase. I'll wait to see who gets nominated.</think><wait/>",
+        "<think>Defense phase. I'm not on trial, so I'll observe.</think><wait/>",
+        "<think>Judgement phase. I'll vote innocent unless there's strong evidence.</think><vote>innocent</vote>",
+        "<think>Last Words. Not on trial.</think><wait/>",
+        "<think>Pre-Night. I'll prepare to heal again.</think><wait/>",
+        "<think>Night 2. I'll heal Eve again to keep the Jailor safe.</think><protect>Eve</protect>",
+    ]
+    charlie_script += [
+        "<think>Day 2. I survived jail. I'll keep quiet and see if the Jailor trusts me.</think><wait/>",
+        "<think>Nomination phase. I'll wait to see who gets nominated.</think><wait/>",
+        "<think>Defense phase. I'm not on trial, so I'll observe.</think><wait/>",
+        "<think>Judgement phase. I'll vote innocent unless there's strong evidence.</think><vote>innocent</vote>",
+        "<think>Last Words. Not on trial.</think><wait/>",
+        "<think>Pre-Night. I'll prepare to investigate.</think><wait/>",
+        "<think>Night 2. I'll investigate Henry tonight.</think><investigate>Henry</investigate>",
+    ]
+    diana_script += [
+        "<think>Day 2. Eve survived, so my protection may have helped. I'll keep quiet and see if anyone claims attacked.</think><wait/>",
+        "<think>Nomination phase. I'll wait to see who gets nominated.</think><wait/>",
+        "<think>Defense phase. I'm not on trial, so I'll observe.</think><wait/>",
+        "<think>Judgement phase. I'll vote innocent unless there's strong evidence.</think><vote>innocent</vote>",
+        "<think>Last Words. Not on trial.</think><wait/>",
+        "<think>Pre-Night. I'll prepare to protect again.</think><wait/>",
+        "<think>Night 2. I'll protect Eve again to keep the Jailor safe.</think><protect>Eve</protect>",
+    ]
+    eve_script += [
+        "<think>Day 2. Charlie claimed Investigator in jail. I'll keep an eye on him but won't execute yet. I'll announce that he claimed Investigator.</think><speak>Charlie claimed Investigator in jail last night. Town, keep an eye on him.</speak>",
+        "<think>Nomination phase. I'll wait to see who gets nominated.</think><wait/>",
+        "<think>Defense phase. I'm not on trial, so I'll observe.</think><wait/>",
+        "<think>Judgement phase. I'll vote innocent unless there's strong evidence.</think><vote>innocent</vote>",
+        "<think>Last Words. Not on trial.</think><wait/>",
+        "<think>Pre-Night. I'll prepare to jail again.</think><wait/>",
+        "<think>Night 2. I'll jail Kevin tonight to question him.</think><jail>Kevin</jail>",
+    ]
+    frank_script += [
+        "<think>Day 2. I saw who visited Eve last night. I'll keep this info in my notebook.</think><notebook>Recorded visits to Eve N1.</notebook>",
+        "<think>Nomination phase. I'll wait to see who gets nominated.</think><wait/>",
+        "<think>Defense phase. I'm not on trial, so I'll observe.</think><wait/>",
+        "<think>Judgement phase. I'll vote innocent unless there's strong evidence.</think><vote>innocent</vote>",
+        "<think>Last Words. Not on trial.</think><wait/>",
+        "<think>Pre-Night. I'll prepare to watch again.</think><wait/>",
+        "<think>Night 2. I'll watch Bob tonight.</think><watch>Bob</watch>",
+    ]
+    grace_script += [
+        "<think>Day 2. Jailor survived, so the town protectives did their job. I'll stay quiet for now.</think><wait/>",
+        "<think>Nomination phase. I'll wait to see who gets nominated.</think><wait/>",
+        "<think>Defense phase. I'm not on trial, so I'll observe.</think><wait/>",
+        "<think>Judgement phase. I'll vote innocent unless there's strong evidence.</think><vote>innocent</vote>",
+        "<think>Last Words. Not on trial.</think><wait/>",
+        "<think>Pre-Night. I'll prepare for the next day.</think><wait/>",
+        "<think>Night 2. No action for Mayor at night.</think><wait/>",
+    ]
+    henry_script += [
+        "<think>Day 2. Grace was targeted last night. I'll try to steer suspicion away from Mafia.</think><wait/>",
+        "<think>Nomination phase. I'll wait to see who gets nominated and push suspicion if possible.</think><wait/>",
+        "<think>Defense phase. I'm not on trial, so I'll observe.</think><wait/>",
+        "<think>Judgement phase. I'll vote guilty if a Townie is on trial.</think><vote>guilty</vote>",
+        "<think>Last Words. Not on trial.</think><wait/>",
+        "<think>Pre-Night. I'll coordinate with Mafia.</think><wait/>",
+        "<think>Night 2. I'll order a kill on Bob.</think><kill>Bob</kill>",
+    ]
+    igor_script += [
+        "<think>Day 2. I'll support the Godfather's plan and stay quiet.</think><wait/>",
+        "<think>Nomination phase. I'll wait to see who gets nominated.</think><wait/>",
+        "<think>Defense phase. I'm not on trial, so I'll observe.</think><wait/>",
+        "<think>Judgement phase. I'll vote guilty if a Townie is on trial.</think><vote>guilty</vote>",
+        "<think>Last Words. Not on trial.</think><wait/>",
+        "<think>Pre-Night. I'll coordinate with Mafia.</think><wait/>",
+        "<think>Night 2. Awaiting Godfather's orders.</think><wait/>",
+    ]
+    jane_script += [
+        "<think>Day 2. I'll share my investigation results with Mafia privately.</think><wait/>",
+        "<think>Nomination phase. I'll wait to see who gets nominated.</think><wait/>",
+        "<think>Defense phase. I'm not on trial, so I'll observe.</think><wait/>",
+        "<think>Judgement phase. I'll vote guilty if a Townie is on trial.</think><vote>guilty</vote>",
+        "<think>Last Words. Not on trial.</think><wait/>",
+        "<think>Pre-Night. I'll prepare to investigate again.</think><wait/>",
+        "<think>Night 2. I'll investigate Diana tonight.</think><investigate>Diana</investigate>",
+    ]
+    kevin_script += [
+        "<think>Day 2. I'll act like a townie and avoid suspicion.</think><wait/>",
+        "<think>Nomination phase. I'll wait to see who gets nominated.</think><wait/>",
+        "<think>Defense phase. I'm not on trial, so I'll observe.</think><wait/>",
+        "<think>Judgement phase. I'll vote innocent to blend in.</think><vote>innocent</vote>",
+        "<think>Last Words. Not on trial.</think><wait/>",
+        "<think>Pre-Night. I'll prepare to kill again.</think><wait/>",
+        "<think>Night 2. I'll kill Grace tonight.</think><kill>Grace</kill>",
+    ]
+    luna_script += [
+        "<think>Day 2. I'll stay quiet and avoid suspicion.</think><wait/>",
+        "<think>Nomination phase. I'll wait to see who gets nominated.</think><wait/>",
+        "<think>Defense phase. I'm not on trial, so I'll observe.</think><wait/>",
+        "<think>Judgement phase. I'll vote innocent to blend in.</think><vote>innocent</vote>",
+        "<think>Last Words. Not on trial.</think><wait/>",
+        "<think>Pre-Night. I'll prepare to douse again.</think><wait/>",
+        "<think>Night 2. I'll douse Henry tonight.</think><douse>Henry</douse>",
+    ]
+    mona_script += [
+        "<think>Day 2. I'll try to get my target lynched by sowing suspicion.</think><wait/>",
+        "<think>Nomination phase. I'll wait to see who gets nominated.</think><wait/>",
+        "<think>Defense phase. I'm not on trial, so I'll observe.</think><wait/>",
+        "<think>Judgement phase. I'll vote innocent to blend in.</think><vote>innocent</vote>",
+        "<think>Last Words. Not on trial.</think><wait/>",
+        "<think>Pre-Night. I'll prepare to push my target again.</think><wait/>",
+        "<think>Night 2. No action for Executioner at night.</think><wait/>",
+    ]
+    nina_script += [
+        "<think>Day 2. I'll act suspicious to try to get lynched.</think><wait/>",
+        "<think>Nomination phase. I'll wait to see who gets nominated.</think><wait/>",
+        "<think>Defense phase. I'm not on trial, so I'll observe.</think><wait/>",
+        "<think>Judgement phase. I'll vote innocent to blend in.</think><vote>innocent</vote>",
+        "<think>Last Words. Not on trial.</think><wait/>",
+        "<think>Pre-Night. I'll prepare to act suspicious again.</think><wait/>",
+        "<think>Night 2. No action for Jester at night.</think><wait/>",
+    ]
+    oscar_script += [
+        "<think>Day 2. I'll stay quiet and try to survive.</think><wait/>",
+        "<think>Nomination phase. I'll wait to see who gets nominated.</think><wait/>",
+        "<think>Defense phase. I'm not on trial, so I'll observe.</think><wait/>",
+        "<think>Judgement phase. I'll vote innocent to blend in.</think><vote>innocent</vote>",
+        "<think>Last Words. Not on trial.</think><wait/>",
+        "<think>Pre-Night. I'll prepare to use a vest again.</think><wait/>",
+        "<think>Night 2. I'll use a vest tonight.</think><vest/>",
+    ]
 
-def create_player_ais(lobby: LobbyConfig) -> Dict[str, PlayerAI]:
-    """Create AI instances for each player based on their role."""
-    
-    player_ais = {}
-    
-    for agent in lobby.agents:
-        role = RoleName(agent.role)
-        
-        # Determine faction (simplified)
-        if role in [RoleName.GODFATHER, RoleName.MAFIOSO, RoleName.CONSIGLIERE]:
-            faction = Faction.MAFIA
-        elif role in [RoleName.SERIAL_KILLER, RoleName.ARSONIST, RoleName.JESTER, RoleName.SURVIVOR]:
-            faction = Faction.NEUTRAL
+    # --- Set up the game and assign roles ---
+    player_names = [
+        "Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Henry", "Igor", "Jane", "Kevin", "Luna", "Mona", "Nina", "Oscar"
+    ]
+    roles = [
+        RoleName.SHERIFF, RoleName.DOCTOR, RoleName.INVESTIGATOR, RoleName.BODYGUARD, RoleName.JAILOR,
+        RoleName.LOOKOUT, RoleName.MAYOR, RoleName.GODFATHER, RoleName.MAFIOSO, RoleName.CONSIGLIERE,
+        RoleName.SERIAL_KILLER, RoleName.ARSONIST, RoleName.EXECUTIONER, RoleName.JESTER, RoleName.SURVIVOR
+    ]
+    players = []
+    for name, role_name in zip(player_names, roles):
+        role = create_role_from_name(role_name)
+        player = Player(name, role)
+        players.append(player)
+
+    config = GameConfiguration()
+    game = Game(config, players)
+
+    # --- Map agents ---
+    hardcoded_scripts = {
+        "Alice": alice_script,
+        "Bob": bob_script,
+        "Charlie": charlie_script,
+        "Diana": diana_script,
+        "Eve": eve_script,
+        "Frank": frank_script,
+        "Grace": grace_script,
+        "Henry": henry_script,
+        "Igor": igor_script,
+        "Jane": jane_script,
+        "Kevin": kevin_script,
+        "Luna": luna_script,
+        "Mona": mona_script,
+        "Nina": nina_script,
+        "Oscar": oscar_script,
+    }
+    placeholder = lambda name, role_name: [f"<think>Placeholder for {name} as {role_name.value}</think><wait/>", f"<think>Placeholder N1 for {name}</think><wait/>"]
+    scripted_agents = {}
+    for name, role_name in zip(player_names, roles):
+        if name in hardcoded_scripts:
+            scripted_agents[name] = ScriptedAgent(hardcoded_scripts[name])
         else:
-            faction = Faction.TOWN
-            
-        # Create appropriate AI class
-        if faction == Faction.TOWN:
-            if role in [RoleName.SHERIFF, RoleName.INVESTIGATOR, RoleName.LOOKOUT, RoleName.SPY]:
-                ai = TownInvestigativeAI(agent.id, role, faction)
-            elif role in [RoleName.DOCTOR, RoleName.BODYGUARD, RoleName.CRUSADER]:
-                ai = TownProtectiveAI(agent.id, role, faction)
-            else:
-                ai = TownInvestigativeAI(agent.id, role, faction)  # Default to investigative
-        elif faction == Faction.MAFIA:
-            ai = MafiaAI(agent.id, role, faction)
-        else:  # NEUTRAL
-            ai = NeutralAI(agent.id, role, faction)
-            
-        player_ais[agent.id] = ai
-        
-    return player_ais
+            scripted_agents[name] = ScriptedAgent(placeholder(name, role_name))
 
+    # --- Run Day 1 Discussion ---
+    print("\n=== Day 1: Discussion ===\n")
+    game.time = game.time.DAY
+    game.phase = Phase.DISCUSSION
+    observations = run_scripted_game(scripted_agents, game, "Day 1 Discussion", args)
 
-class ComprehensiveMatchTest:
-    """The main test class that orchestrates the entire simulation."""
-    
-    def __init__(self):
-        self.lobby = create_comprehensive_lobby()
-        self.player_ais = create_player_ais(self.lobby)
-        self.engine = MockInferenceEngine()
-        self.match_runner = None
-        self.test_results = {
-            'phases_completed': 0,
-            'deaths': [],
-            'lynches': [],
-            'night_actions': [],
-            'day_actions': [],
-            'victory_condition': None,
-            'winner': None,
-            'total_turns': 0
-        }
-        
-    def setup_match(self):
-        """Set up the match with our mock engine."""
-        
-        # Configure the mock engine with our player AIs
-        for agent_id, ai in self.player_ais.items():
-            self.engine.set_player_ai(agent_id, ai.respond)
-            
-        # Patch the InferenceClient class to use our mock
-        original_client = InferenceClient
-        
-        def mock_client_init(self_inner, lane_url: str, model_name: str):
-            return MockInferenceClient(lane_url, model_name, self.engine)
-            
-        InferenceClient.__init__ = mock_client_init
-        
-        # Create the match runner
-        self.match_runner = MatchRunner(self.engine, self.lobby)
-        
-    def run_comprehensive_test(self) -> Dict[str, Any]:
-        """Run the comprehensive test and return results."""
-        
-        print("🎭 Starting the World's Largest Town of Salem Test!")
-        print("=" * 60)
-        
-        # Setup
-        self.setup_match()
-        
-        print(f"✅ Match setup complete with {len(self.lobby.agents)} players")
-        print(f"📋 Role Distribution:")
-        for agent in self.lobby.agents:
-            alignment = "🔴 Evil" if agent.misaligned else "🔵 Good"
-            print(f"   {agent.id}: {agent.role} ({alignment})")
-            
-        print("\n🎮 Starting match simulation...")
-        
-        # Run the match
-        try:
-            self.match_runner.run()
-            print("✅ Match completed successfully!")
-            
-        except Exception as e:
-            print(f"❌ Match ended with error: {e}")
-            self.test_results['error'] = str(e)
-            
-        # Collect final results
-        self._collect_final_results()
-        
-        print("\n📊 Test Results Summary:")
-        print(f"   Phases completed: {self.test_results['phases_completed']}")
-        print(f"   Total deaths: {len(self.test_results['deaths'])}")
-        print(f"   Total lynches: {len(self.test_results['lynches'])}")
-        print(f"   Total player turns: {self.test_results['total_turns']}")
-        
-        if self.test_results['winner']:
-            print(f"   🏆 Winner: {self.test_results['winner']}")
-        
-        return self.test_results
-        
-    def _collect_final_results(self):
-        """Collect final results from the match."""
-        
-        if self.match_runner and self.match_runner.game:
-            game = self.match_runner.game
-            
-            # Collect game statistics
-            self.test_results['phases_completed'] = game.day * 2  # rough estimate
-            self.test_results['deaths'] = [
-                {'name': p.name, 'role': p.role.name.value, 'day': game.day}
-                for p in game.graveyard
-            ]
-            
-            # Determine winner
-            if game.winners:
-                self.test_results['winner'] = [p.name for p in game.winners]
-            elif game.draw:
-                self.test_results['winner'] = "Draw"
-            else:
-                # Determine by remaining players
-                alive_factions = {p.role.faction for p in game.players if p.is_alive}
-                if len(alive_factions) == 1:
-                    self.test_results['winner'] = list(alive_factions)[0].name
-                    
-            # Count total turns
-            self.test_results['total_turns'] = sum(ai.turn_count for ai in self.player_ais.values())
+    # --- Advance to Night 1 ---
+    print("\n=== Night 1 ===\n")
+    game.advance_to_night()
+    run_scripted_game(scripted_agents, game, "Night 1", args, observations=observations)
 
-
-def test_comprehensive_match_simulation():
-    """The main test function - THE WORLD'S LARGEST TOWN OF SALEM TEST!"""
-    
-    # Create and run the comprehensive test
-    test = ComprehensiveMatchTest()
-    results = test.run_comprehensive_test()
-    
-    # Verify the test worked
-    assert results['total_turns'] > 0, "No player turns were recorded"
-    assert results['phases_completed'] > 0, "No phases were completed"
-    
-    # Verify system integration
-    assert len(results['deaths']) >= 0, "Death tracking failed"
-    assert results['winner'] is not None, "Victory condition not determined"
-    
-    print("\n🎉 THE WORLD'S LARGEST TOWN OF SALEM TEST PASSED!")
-    print("🎯 Full system integration verified")
-    print("💯 All 15 players participated with unique AI personalities")
-    print("🔧 Match runner, prompting system, and game engine all working")
-    print("⚡ Complex role interactions and game mechanics tested")
-    
-    return results
-
+    # --- Print final results ---
+    print("\n=== FINAL GAME STATE ===\n")
+    print_game_state(game, "Final")
+    print("Winners:")
+    if game.winners:
+        for winner in game.winners:
+            print(f"  {winner.name} ({winner.role.name.value})")
+    else:
+        print("  No winners yet.")
+    print("Deaths:")
+    for p in game.players:
+        if not p.is_alive:
+            print(f"  {p.name} ({p.role.name.value})")
+    print("\n--- END OF TEST ---\n")
 
 if __name__ == "__main__":
-    # Run the test directly
-    test_comprehensive_match_simulation() 
+    test_hardcoded_town_of_salem_game()

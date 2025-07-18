@@ -593,8 +593,17 @@ def build_user_prompt(game: 'Game', actor: 'Player') -> str:
             graveyard_text += f"- {dead_player.name} [DEAD]\n"
         sections.append(graveyard_text.rstrip())
     
-    # Environment observations (placeholder for now)
-    sections.append("Environment Observations\n[No new events since the phase began.]")
+    # Visible chat messages
+    visible_messages = game.chat.get_visible_messages(actor)
+    if visible_messages:
+        chat_text = "Chat Log\n"
+        for msg in visible_messages:
+            chat_text += f"{msg}\n"
+        sections.append(chat_text.rstrip())
+
+    # Jailed status
+    if actor.is_jailed:
+        sections.append("You have been hauled off to jail!")
     
     return "\n\n".join(sections)
 

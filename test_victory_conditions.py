@@ -37,7 +37,7 @@ def test_town_victory_basic():
     town_wins = winner == Faction.TOWN
     
     print(f"Town vs Mafia result: {winner}")
-    print(f"Town victory: {'✓' if town_wins else '✗'}")
+    print(f"Town victory: {'[PASS]' if town_wins else '[FAIL]'}")
     
     return town_wins
 
@@ -61,7 +61,7 @@ def test_town_victory_with_neutrals():
     town_wins = winner == Faction.TOWN
     
     print(f"Town + Survivor vs dead Mafia result: {winner}")
-    print(f"Town victory with Survivor: {'✓' if town_wins else '✗'}")
+    print(f"Town victory with Survivor: {'[PASS]' if town_wins else '[FAIL]'}")
     
     return town_wins
 
@@ -87,7 +87,7 @@ def test_mafia_victory():
     mafia_wins = winner == Faction.MAFIA
     
     print(f"Mafia majority result: {winner}")
-    print(f"Mafia victory: {'✓' if mafia_wins else '✗'}")
+    print(f"Mafia victory: {'[PASS]' if mafia_wins else '[FAIL]'}")
     
     return mafia_wins
 
@@ -113,7 +113,7 @@ def test_coven_victory():
     coven_wins = winner == Faction.COVEN
     
     print(f"Coven majority result: {winner}")
-    print(f"Coven victory: {'✓' if coven_wins else '✗'}")
+    print(f"Coven victory: {'[PASS]' if coven_wins else '[FAIL]'}")
     
     return coven_wins
 
@@ -137,7 +137,7 @@ def test_vampire_victory():
     vampire_wins = winner == Faction.VAMPIRE
     
     print(f"Vampire majority result: {winner}")
-    print(f"Vampire victory: {'✓' if vampire_wins else '✗'}")
+    print(f"Vampire victory: {'[PASS]' if vampire_wins else '[FAIL]'}")
     
     return vampire_wins
 
@@ -162,7 +162,7 @@ def test_serial_killer_victory():
     sk_wins = len(game.winners) > 0 and game.winners[0] == serial_killer
     
     print(f"SK solo result: {winner}, winners: {[w.name for w in game.winners]}")
-    print(f"SK victory: {'✓' if sk_wins else '✗'}")
+    print(f"SK victory: {'[PASS]' if sk_wins else '[FAIL]'}")
     
     return sk_wins
 
@@ -187,7 +187,7 @@ def test_arsonist_victory():
     arsonist_wins = len(game.winners) > 0 and game.winners[0] == arsonist
     
     print(f"Arsonist solo result: {winner}, winners: {[w.name for w in game.winners]}")
-    print(f"Arsonist victory: {'✓' if arsonist_wins else '✗'}")
+    print(f"Arsonist victory: {'[PASS]' if arsonist_wins else '[FAIL]'}")
     
     return arsonist_wins
 
@@ -212,7 +212,7 @@ def test_werewolf_victory():
     werewolf_wins = len(game.winners) > 0 and game.winners[0] == werewolf
     
     print(f"Werewolf solo result: {winner}, winners: {[w.name for w in game.winners]}")
-    print(f"Werewolf victory: {'✓' if werewolf_wins else '✗'}")
+    print(f"Werewolf victory: {'[PASS]' if werewolf_wins else '[FAIL]'}")
     
     return werewolf_wins
 
@@ -237,7 +237,7 @@ def test_jester_victory():
     jester_wins = len(game.winners) > 0 and game.winners[0] == jester
     
     print(f"Jester lynched result: {winner}, winners: {[w.name for w in game.winners]}")
-    print(f"Jester victory: {'✓' if jester_wins else '✗'}")
+    print(f"Jester victory: {'[PASS]' if jester_wins else '[FAIL]'}")
     
     return jester_wins
 
@@ -265,7 +265,7 @@ def test_executioner_victory():
     exe_wins = len(game.winners) > 0 and game.winners[0] == executioner
     
     print(f"Executioner target lynched result: {winner}, winners: {[w.name for w in game.winners]}")
-    print(f"Executioner victory: {'✓' if exe_wins else '✗'}")
+    print(f"Executioner victory: {'[PASS]' if exe_wins else '[FAIL]'}")
     
     return exe_wins
 
@@ -287,7 +287,7 @@ def test_pirate_victory():
     pirate_wins = len(game.winners) > 0 and game.winners[0] == pirate
     
     print(f"Pirate 2 plunders result: {winner}, winners: {[w.name for w in game.winners]}")
-    print(f"Pirate victory: {'✓' if pirate_wins else '✗'}")
+    print(f"Pirate victory: {'[PASS]' if pirate_wins else '[FAIL]'}")
     
     return pirate_wins
 
@@ -311,7 +311,7 @@ def test_survivor_victory():
     survivor_survives = winner == Faction.TOWN and survivor.is_alive
     
     print(f"Survivor + Town vs dead Mafia result: {winner}")
-    print(f"Survivor survival: {'✓' if survivor_survives else '✗'}")
+    print(f"Survivor survival: {'[PASS]' if survivor_survives else '[FAIL]'}")
     
     return survivor_survives
 
@@ -335,7 +335,7 @@ def test_blocking_neutrals():
     game_continues = winner is None  # SK should block Town win
     
     print(f"Town + SK vs dead Mafia result: {winner}")
-    print(f"SK blocks Town win: {'✓' if game_continues else '✗'}")
+    print(f"SK blocks Town win: {'[PASS]' if game_continues else '[FAIL]'}")
     
     return game_continues
 
@@ -359,7 +359,7 @@ def test_multiple_nk_same_type():
     both_sks_win = len(game.winners) == 2 and sk1 in game.winners and sk2 in game.winners
     
     print(f"Multiple SK result: {winner}, winners: {[w.name for w in game.winners]}")
-    print(f"Both SKs win: {'✓' if both_sks_win else '✗'}")
+    print(f"Both SKs win: {'[PASS]' if both_sks_win else '[FAIL]'}")
     
     return both_sks_win
 
@@ -386,7 +386,7 @@ def test_witch_victory_conditions():
     results.append(witch_with_coven)
     
     print(f"Witch + Coven result: {winner}")
-    print(f"Witch wins with Coven: {'✓' if witch_with_coven else '✗'}")
+    print(f"Witch wins with Coven: {'[PASS]' if witch_with_coven else '[FAIL]'}")
     
     # Test 2: Witch + Town vs others (no Coven present)
     witch2 = Player("Witch2", Witch())
@@ -405,7 +405,7 @@ def test_witch_victory_conditions():
     results.append(witch_with_town)
     
     print(f"Witch + Town (no Coven) result: {winner2}")
-    print(f"Witch wins with Town: {'✓' if witch_with_town else '✗'}")
+    print(f"Witch wins with Town: {'[PASS]' if witch_with_town else '[FAIL]'}")
     
     return all(results)
 
@@ -432,7 +432,7 @@ def test_edge_cases():
     results.append(everyone_dead)
     
     print(f"Everyone dead result: {winner}")
-    print(f"Game ends when everyone dead: {'✓' if everyone_dead else '✗'}")
+    print(f"Game ends when everyone dead: {'[PASS]' if everyone_dead else '[FAIL]'}")
     
     # Test 2: Conflicting individual winners (should prioritize individual wins)
     pirate = Player("Pirate", Pirate())
@@ -449,13 +449,13 @@ def test_edge_cases():
     results.append(pirate_priority)
     
     print(f"Pirate vs Town result: {winner2}, winners: {[w.name for w in game2.winners]}")
-    print(f"Individual win takes priority: {'✓' if pirate_priority else '✗'}")
+    print(f"Individual win takes priority: {'[PASS]' if pirate_priority else '[FAIL]'}")
     
     return all(results)
 
 def run_comprehensive_victory_tests():
     """Run all victory condition tests."""
-    print("🎯 COMPREHENSIVE VICTORY CONDITIONS TEST SUITE")
+    print("[INFO] COMPREHENSIVE VICTORY CONDITIONS TEST SUITE")
     print("=" * 60)
     
     tests = [
@@ -483,11 +483,11 @@ def run_comprehensive_victory_tests():
             result = test_func()
             results.append((test_name, result))
         except Exception as e:
-            print(f"❌ {test_name}: ERROR - {e}")
+            print(f"[ERROR] {test_name}: ERROR - {e}")
             results.append((test_name, False))
     
     print("\n" + "=" * 60)
-    print("📊 VICTORY CONDITIONS TEST RESULTS")
+    print("[INFO] VICTORY CONDITIONS TEST RESULTS")
     print("=" * 60)
     
     passed = 0
@@ -505,9 +505,9 @@ def run_comprehensive_victory_tests():
     print(f"Total: {len(results)} | Passed: {passed} | Failed: {failed}")
     
     if failed == 0:
-        print("🎉 ALL VICTORY CONDITION TESTS PASSED!")
+        print("[PASS] ALL VICTORY CONDITION TESTS PASSED!")
     else:
-        print(f"⚠️  {failed} test(s) failed - victory conditions need attention")
+        print(f"[WARN] {failed} test(s) failed - victory conditions need attention")
     
     return failed == 0
 

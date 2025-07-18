@@ -104,10 +104,20 @@ class TurnBatcher:
             # Create role instance
             try:
                 role = create_role_by_name(role_name)
-            except:
+            except Exception as e:
                 # Fallback to a basic role if creation fails
+                # Log the error for debugging
+                print(f"Warning: Failed to create role {role_name.name if isinstance(role_name, RoleName) else role_name}: {e}. Falling back to default role.")
                 role = Role()
-                role.name = role_name
+                # Ensure role.name is always a RoleName Enum member
+                if isinstance(role_name, RoleName):
+                    role.name = role_name
+                else:
+                    # Assign a default valid RoleName if conversion fails or input is not an enum
+                    role.name = RoleName.INVESTIGATOR # Or another suitable default
+                # Assign default faction and alignment for the fallback role
+                role.faction = get_role_faction(role.name)
+                role.alignment = get_role_alignment(role.name)
             
             player = Player(player_name, role)
             players.append(player)

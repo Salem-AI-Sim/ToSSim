@@ -4,6 +4,7 @@ from .enums import RoleName, Faction, RoleAlignment, Attack, Defense, Priority, 
 from .alignment import get_role_alignment, get_role_faction
 import random
 from .enums import DuelMove, DuelDefense
+from .debug_utils import debug_print, debug_exception
 
 if TYPE_CHECKING:
     from .player import Player
@@ -17,7 +18,7 @@ class Role(ABC):
         self.attack: Attack = Attack.NONE
         self.defense: Defense = Defense.NONE
         self.is_unique: bool = False
-        self.action_priority = Priority.SUPPORT_DECEPTION
+        self.action_priority = Priority.PRIORITY_3
         self.is_roleblock_immune = False
         self.detection_immune = False
         self.control_immune = False
@@ -38,12 +39,37 @@ class Role(ABC):
         pass
 
     def get_info(self):
+        try:
+            name = self.name.value
+        except Exception:
+            debug_exception(f"Failed to access .value on self.name: {self.name} (type: {type(self.name)})")
+            name = str(self.name)
+        try:
+            faction = self.faction.name
+        except Exception:
+            debug_exception(f"Failed to access .name on self.faction: {self.faction} (type: {type(self.faction)})")
+            faction = str(self.faction)
+        try:
+            alignment = self.alignment.name
+        except Exception:
+            debug_exception(f"Failed to access .name on self.alignment: {self.alignment} (type: {type(self.alignment)})")
+            alignment = str(self.alignment)
+        try:
+            attack = self.attack.name
+        except Exception:
+            debug_exception(f"Failed to access .name on self.attack: {self.attack} (type: {type(self.attack)})")
+            attack = str(self.attack)
+        try:
+            defense = self.defense.name
+        except Exception:
+            debug_exception(f"Failed to access .name on self.defense: {self.defense} (type: {type(self.defense)})")
+            defense = str(self.defense)
         return {
-            "name": self.name.value,
-            "faction": self.faction.name,
-            "alignment": self.alignment.name,
-            "attack": self.attack.name,
-            "defense": self.defense.name,
+            "name": name,
+            "faction": faction,
+            "alignment": alignment,
+            "attack": attack,
+            "defense": defense,
             "is_unique": self.is_unique
         }
 
@@ -411,6 +437,8 @@ class Jailor(Role):
         return None
 
     def perform_night_action(self, player: 'Player', target: 'Player' = None, game: 'Game' = None):
+        if game.day == 0:
+            return "You cannot execute on the first night."
         if not self.jailed_target:
             return "You did not jail anyone."
         
@@ -611,7 +639,15 @@ class Pirate(Role):
 class PlaceholderRole(Role):
     def __init__(self, role_name: RoleName):
         super().__init__()
-        self.name = role_name
+        # Ensure self.name is always a RoleName enum member
+        if isinstance(role_name, RoleName):
+            self.name = role_name
+        else:
+            try:
+                self.name = RoleName(role_name)
+            except ValueError:
+                # Fallback if string cannot be converted to RoleName enum
+                self.name = RoleName.INVESTIGATOR # Assign a safe default
         self.alignment = get_role_alignment(self.name)
         self.faction = get_role_faction(self.name)
     def perform_night_action(self, player: 'Player', target: 'Player' = None, game: 'Game' = None): pass
@@ -979,7 +1015,7 @@ class Disguiser(Role):
         self.name = RoleName.DISGUISER
         self.alignment = get_role_alignment(self.name)
         self.faction = get_role_faction(self.name)
-        self.action_priority = Priority.SUPPORT_DECEPTION
+        self.action_priority = Priority.PRIORITY_3
         self.visit_type = VisitType.NON_HARMFUL  # Disguiser doesn't trigger BG/Trap
         self.disguise_target = None  # Target to disguise as
         self.mafia_target = None     # Mafia member to disguise
@@ -1003,7 +1039,16 @@ class Disguiser(Role):
         mafia_member = mafia_members[0]
         
         # Set up the disguise - it will take effect when investigations happen
-        mafia_member.disguised_as_role = target.role.name
+        # Ensure disguised_role_name is always a RoleName enum member
+        disguised_role_name = target.role.name
+        if not isinstance(disguised_role_name, RoleName):
+            try:
+                disguised_role_name = RoleName(disguised_role_name)
+            except ValueError:
+                # Fallback if string cannot be converted to RoleName enum
+                # This should ideally not happen if target.role.name is always a RoleName enum
+                disguised_role_name = RoleName.INVESTIGATOR # Assign a safe default
+        mafia_member.disguised_as_role = disguised_role_name
         self.disguise_target = target
         self.mafia_target = mafia_member
         
@@ -1016,7 +1061,7 @@ class Forger(Role):
         self.name = RoleName.FORGER
         self.alignment = get_role_alignment(self.name)
         self.faction = get_role_faction(self.name)
-        self.action_priority = Priority.SUPPORT_DECEPTION
+        self.action_priority = Priority.PRIORITY_3
         self.visit_type = VisitType.ASTRAL
         self.charges = 2
 
@@ -1037,7 +1082,7 @@ class Framer(Role):
         self.name = RoleName.FRAMER
         self.alignment = get_role_alignment(self.name)
         self.faction = get_role_faction(self.name)
-        self.action_priority = Priority.SUPPORT_DECEPTION
+        self.action_priority = Priority.PRIORITY_3
         self.visit_type = VisitType.NON_HARMFUL
 
     def perform_night_action(self, player: 'Player', target: 'Player' = None, game: 'Game' = None):
@@ -1062,7 +1107,7 @@ class Hypnotist(Role):
         self.name = RoleName.HYPNOTIST
         self.alignment = get_role_alignment(self.name)
         self.faction = get_role_faction(self.name)
-        self.action_priority = Priority.SUPPORT_DECEPTION
+        self.action_priority = Priority.PRIORITY_3
         self.visit_type = VisitType.NON_HARMFUL
 
     def perform_night_action(self, player: 'Player', target: 'Player' = None, game: 'Game' = None):
@@ -1080,7 +1125,7 @@ class Janitor(Role):
         self.name = RoleName.JANITOR
         self.alignment = get_role_alignment(self.name)
         self.faction = get_role_faction(self.name)
-        self.action_priority = Priority.SUPPORT_DECEPTION
+        self.action_priority = Priority.PRIORITY_3
         self.visit_type = VisitType.HARMFUL
         self.charges = 3
 
@@ -1165,7 +1210,7 @@ class Blackmailer(Role):
         self.name = RoleName.BLACKMAILER
         self.alignment = get_role_alignment(self.name)
         self.faction = get_role_faction(self.name)
-        self.action_priority = Priority.SUPPORT_DECEPTION
+        self.action_priority = Priority.PRIORITY_3
 
     def perform_night_action(self, player: 'Player', target: 'Player' = None, game: 'Game' = None):
         if not game or not target:
@@ -1465,7 +1510,7 @@ class Plaguebearer(Role):
         self.alignment = get_role_alignment(self.name)
         self.faction = get_role_faction(self.name)
         self.infected = set()
-        self.action_priority = Priority.SUPPORT_DECEPTION
+        self.action_priority = Priority.PRIORITY_3
 
     def perform_night_action(self, player:'Player', target:'Player'=None, game:'Game'=None):
         if not game:
@@ -1781,7 +1826,7 @@ class PotionMaster(Role):
         self.alignment = get_role_alignment(self.name)
         self.faction = get_role_faction(self.name)
         self.is_coven = True
-        self.action_priority = Priority.SUPPORT_DECEPTION
+        self.action_priority = Priority.PRIORITY_3
         # Track individual potion cooldowns (heal/reveal/attack)
         self._cooldowns = {"heal": 0, "reveal": 0, "attack": 0}
         self._last_used = None  # last potion used

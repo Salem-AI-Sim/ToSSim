@@ -6,6 +6,7 @@ from .day_phase import DayPhase
 import random
 from collections import defaultdict
 from .chat import ChatManager, ChatChannelType
+from .debug_utils import debug_print, debug_exception
 
 class Game:
     def __init__(self, config: GameConfiguration, players: list[Player]):
@@ -92,7 +93,11 @@ class Game:
             if p.is_alive and hasattr(p, "remember_role_name") and p.remember_role_name:
                 new_role = create_role_from_name(p.remember_role_name)
                 p.assign_role(new_role)
-                print(f"[Amnesiac] {p.name} has remembered they were a {new_role.name.value}!")
+                debug_print(f"DEBUG: Amnesiac new_role.name type: {type(new_role.name)}, value: {new_role.name}")
+                try:
+                    print(f"[Amnesiac] {p.name} has remembered they were a {new_role.name.value}!")
+                except AttributeError:
+                    print(f"[Amnesiac] ERROR: {p.name} remembered a role with a non-enum name: {new_role.name} (type: {type(new_role.name)})")
                 #Clear the marker so it doesn't repeat
                 p.remember_role_name = None
 
@@ -510,7 +515,11 @@ class Game:
                 should_kill = True
             if should_kill:
                 target.is_alive = False
-                print(f"[Game Log] {attacker.name} ({attacker.role.name.value}) killed {target.name} ({target.role.name.value})")
+                debug_print(f"DEBUG: attacker.role.name type: {type(attacker.role.name)}, value: {attacker.role.name}")
+                try:
+                    print(f"[Game Log] {attacker.name} ({attacker.role.name.value}) killed {target.name} ({target.role.name.value})")
+                except AttributeError:
+                    print(f"[Game Log] ERROR: Attacker role name: {attacker.role.name} (type: {type(attacker.role.name)}), Target role name: {target.role.name} (type: {type(target.role.name)})")
                 
                 # TODO: RESEARCH METRICS - Track death causes for research
                 if attacker.role.name == RoleName.VIGILANTE:
@@ -540,7 +549,11 @@ class Game:
                     if hasattr(p, 'disguise_target') and p.disguise_target == target and p.is_alive:
                         #Save original role for future if needed, then switch
                         p.original_role_name = p.role.name
-                        p.role.name = target.role.name
+                        # Defensive: ensure RoleName Enum
+                        new_role_name = target.role.name
+                        if not isinstance(new_role_name, RoleName):
+                            new_role_name = RoleName(new_role_name)
+                        p.role.name = new_role_name
                         print(f"[Disguiser] {p.name} has disguised themselves as {target.name}!")
 
                 #A won duel that results in a kill is a successful plunder.
@@ -552,7 +565,11 @@ class Game:
                 #Disguiser logic – if any living player had set disguise_target to this victim, change their role label
                 for pl in self.players:
                     if getattr(pl, 'disguise_target', None) == target and pl.is_alive:
-                        pl.role.name = target.role.name
+                        # Defensive: ensure RoleName Enum
+                        new_role_name = target.role.name
+                        if not isinstance(new_role_name, RoleName):
+                            new_role_name = RoleName(new_role_name)
+                        pl.role.name = new_role_name
                         pl.disguise_success = True
                         print(f"[Disguiser] {pl.name} now appears as {target.role.name.value}.")
 
@@ -670,7 +687,11 @@ class Game:
                 death_msg = f"{victim.name} died last night. {death_cause}"
                 self.chat.add_environment_message(death_msg)
                 
-                role_msg = f"{victim.name}'s role was {display_role.value}."
+                try:
+                    role_msg = f"{victim.name}'s role was {display_role.value}."
+                except AttributeError:
+                    print(f"ERROR: display_role.value in _announce_deaths is not an enum: {display_role} (type: {type(display_role)})", file=sys.stderr)
+                    role_msg = f"{victim.name}'s role was {str(display_role)}."
                 self.chat.add_environment_message(role_msg)
                 
                 print(f"{victim.name} ({display_role.value}) was found dead.")
@@ -758,7 +779,11 @@ class Game:
             "Pestilence": "They were killed by Pestilence.",
         }
         
-        role_name = attacker.role.name.value
+        try:
+            role_name = attacker.role.name.value
+        except AttributeError:
+            print(f"[Game Log] ERROR: attacker.role.name in _get_death_cause_message is not an enum: {attacker.role.name} (type: {type(attacker.role.name)})")
+            role_name = str(getattr(attacker.role, 'name', None))
         return death_messages.get(role_name, f"They were killed by {role_name}.")
 
     def _send_notifications(self):
@@ -833,7 +858,10 @@ class Game:
         if self.winners:
             for winner in self.winners:
                 #This handles Jester, Executioner, etc.
-                print(f"{winner.name} ({winner.role.name.value}) has won!")
+                try:
+                    print(f"{winner.name} ({winner.role.name.value}) has won!")
+                except AttributeError:
+                    print(f"ERROR: Winner role name: {winner.role.name} (type: {type(winner.role.name)}) has no .value attribute.")
                 
                 # TODO: RESEARCH METRICS - Track individual winners
                 winner.research_metrics['won_game'] = True

@@ -30,7 +30,7 @@ class RoleAlignment(Enum):
 
 #Canon Role Names
 class RoleName(Enum):
-    #Town Investigative
+     #Town Investigative
     INVESTIGATOR = "Investigator"
     LOOKOUT = "Lookout"
     PSYCHIC = "Psychic"
@@ -94,7 +94,6 @@ class RoleName(Enum):
     POISONER = "Poisoner"
     POTION_MASTER = "Potion Master"
     NECROMANCER = "Necromancer"
-    
 #Display Names (can be the same as RoleName)
 class DisplayName(Enum):
     INVESTIGATOR = "Investigator"

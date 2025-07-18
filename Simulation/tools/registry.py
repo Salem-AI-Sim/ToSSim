@@ -38,7 +38,7 @@ _TOOL_REGISTRY = {
     "check_will": {"name": "check_will", "class": "environment_static"},
     "view_will": {"name": "view_will", "class": "environment_static"},
     "get_time": {"name": "get_time", "class": "environment_static"},
-    "notebook": {"name": "notebook", "class": "environment_static"},
+    "notebook": {"name": "notebook", "class": "environment_terminal"},
     "view_notebook": {"name": "view_notebook", "class": "environment_static"},
     "get_executable_actions": {"name": "get_executable_actions", "class": "environment_static"},
     "action_history": {"name": "action_history", "class": "environment_static"},

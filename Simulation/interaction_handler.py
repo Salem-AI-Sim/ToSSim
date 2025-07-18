@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, List, Union
 
 from Simulation.enums import Time, Phase, RoleName, Attack, DuelMove, Faction
 from Simulation.errors import ErrorCode, format_error, format_success
+from Simulation.grammar import ToSSimGrammarParser  # <-- Add this import
 
 if TYPE_CHECKING:
     from .game import Game
@@ -18,6 +19,10 @@ class InteractionHandler:
         self.game = game
         # Simple regex to find <tag>content</tag> or <tag/>
         self.tool_pattern = re.compile(r"<([a-zA-Z_]+)(?:\s*/>|>(.*?)</\1>)", re.DOTALL)
+        # Get tool and interaction tags from grammar
+        parser = ToSSimGrammarParser()
+        self.tool_tags = parser.tool_tags
+        self.interaction_tags = parser.interaction_tags
 
     def _resolve_target(self, actor: 'Player', target_name: str) -> Union['Player', str]:
         """Finds a player based on a name string.
@@ -59,49 +64,40 @@ class InteractionHandler:
         """
         results = []
         debug_seen = []
-        matches = self.tool_pattern.finditer(text)
+        # Remove <think>...</think> blocks before processing
+        text_wo_think = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+        matches = self.tool_pattern.finditer(text_wo_think)
         
         for match in matches:
-            tool_name = match.group(1).lower()
-            # Group 2 is None for self-closing tags like <reveal/>
+            tag_name = match.group(1).lower()
             content = match.group(2) if match.group(2) is not None else ""
-            
-            debug_seen.append(f"<{tool_name}>{content}")
-            
-            # TODO: RESEARCH METRICS - Track total tool calls
+            debug_seen.append(f"<{tag_name}>{content}")
             actor.research_metrics['total_tool_calls'] += 1
-            
-            handler_method = getattr(self, f"_handle_{tool_name}", None)
-            
+
+            handler_method = getattr(self, f"_handle_{tag_name}", None)
             if not handler_method:
-                # TODO: RESEARCH METRICS - Track unknown/invalid tool attempts
                 actor.research_metrics['unsuccessful_tool_uses'] += 1
-                results.append(format_error(ErrorCode.UNKNOWN_TOOL, f"Unknown tool '{tool_name}'"))
+                results.append(format_error(ErrorCode.UNKNOWN_TOOL, f"Unknown tool '{tag_name}'"))
                 continue
-            
+
             try:
                 result = handler_method(actor, content)
-                print(f"[Debug] Handler result for {tool_name}: {result}")
-                
-                # TODO: RESEARCH METRICS - Track successful vs unsuccessful tool uses
-                if result.startswith("Success:"):
-                    actor.research_metrics['successful_tool_uses'] += 1
-                elif result.startswith("Error:"):
-                    actor.research_metrics['unsuccessful_tool_uses'] += 1
-                    
-                    # TODO: RESEARCH METRICS - Classify error types for research
-                    if "during the day" in result or "at night" in result or "during" in result:
-                        actor.research_metrics['invalid_phase_tool_attempts'] += 1
-                    elif "You are not" in result or "Your role cannot" in result:
-                        actor.research_metrics['wrong_role_tool_attempts'] += 1
-                
-                results.append(result)
+                print(f"[Debug] Handler result for {tag_name}: {result}")
+                if tag_name in self.tool_tags:
+                    # Only wrap tool results in <observation>
+                    if result:
+                        results.append(format_success(result))
+                elif tag_name in self.interaction_tags:
+                    # For interactions, only return result if it's a meaningful message (error, confirmation, or private feedback)
+                    if result and (result.startswith("Error:") or result.startswith("Success:") or result.startswith("[")):
+                        results.append(format_success(result))
+                    # Otherwise, do not return an observation (environment effect only)
+                else:
+                    # Unknown tag (should not happen due to earlier check)
+                    results.append(format_error(ErrorCode.UNKNOWN_TOOL, f"Unknown tag '{tag_name}'"))
             except Exception as e:
-                # TODO: RESEARCH METRICS - Track handler errors as unsuccessful
                 actor.research_metrics['unsuccessful_tool_uses'] += 1
-                # Catch potential errors in handler logic
-                results.append(format_error(ErrorCode.HANDLER_ERROR, f"Error executing '{tool_name}': {e}"))
-        
+                results.append(format_error(ErrorCode.HANDLER_ERROR, f"Error executing '{tag_name}': {e}"))
         if debug_seen:
             print(f"[Debug] Parsed commands from '{actor.name}': {', '.join(debug_seen)}")
         return results
@@ -1003,3 +999,64 @@ class InteractionHandler:
         # Use the notebook tool directly
         from Simulation.tools.registry import _exec_notebook
         return _exec_notebook(content, game=self.game, player=actor) 
+
+    def _handle_speak(self, actor: 'Player', content: str) -> str:
+        """Handle the <speak> interaction: send a public message to chat."""
+        if not content or not content.strip():
+            return "Error: No message provided to speak."
+        # Add the message to the public chat (assuming game has a chat manager)
+        if hasattr(self.game, 'chat') and hasattr(self.game.chat, 'send_speak'):
+            self.game.chat.send_speak(actor, content.strip())
+        # Confirmation is not needed as an observation, but return for logging
+        return f"[Your message has been sent to the public channel.]"
+
+    def _handle_whisper(self, actor: 'Player', content: str) -> str:
+        """Handle the <whisper> interaction: send a private message to another player."""
+        # Expecting format: <whisper target="PlayerName">message</whisper>
+        import re
+        match = re.match(r'\s*target\s*=\s*"([^"]+)"\s*>(.*)', content, re.DOTALL)
+        if not match:
+            return "Error: Invalid whisper format. Use <whisper target=\"PlayerName\">message</whisper>"
+        target_name, message = match.groups()
+        target_name = target_name.strip()
+        message = message.strip()
+        if not target_name or not message:
+            return "Error: Whisper must specify a target and a message."
+        # Find the target player
+        target_player = None
+        for p in self.game.players:
+            if p.name.lower() == target_name.lower() and p.is_alive:
+                target_player = p
+                break
+        if not target_player:
+            return f"Error: No living player named '{target_name}' found."
+        # Add the message to the private chat (assuming game has a chat manager)
+        if hasattr(self.game, 'chat') and hasattr(self.game.chat, 'send_whisper'):
+            self.game.chat.send_whisper(actor, target_player, message)
+        # Confirmation is not needed as an observation, but return for logging
+        return f"[Your message has been privately delivered to {target_player.name}.]" 
+
+    def _handle_roles(self, actor: 'Player', content: str) -> str:
+        """Return detailed information about a role from roles.json."""
+        import json
+        from pathlib import Path
+        role_name = content.strip()
+        if not role_name:
+            return "Error: No role name provided."
+        roles_path = Path(__file__).parent / "tools" / "roles.json"
+        try:
+            with open(roles_path, "r", encoding="utf-8") as f:
+                roles_data = json.load(f)
+        except FileNotFoundError:
+            return "Error: roles.json not found."
+        except json.JSONDecodeError as e:
+            return f"Error: Could not parse roles.json: {e}"
+        # Try to find the role (case-insensitive)
+        for key, value in roles_data.items():
+            if key.lower() == role_name.lower():
+                # Return a formatted string with the role details
+                details = f"Role: {key}\n"
+                for k, v in value.items():
+                    details += f"{k}: {v}\n"
+                return details.strip()
+        return f"Error: Role '{role_name}' not found." 

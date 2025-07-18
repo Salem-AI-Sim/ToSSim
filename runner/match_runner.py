@@ -26,7 +26,7 @@ import re
 from Simulation.game import Game
 from Simulation.config import GameConfiguration
 from Simulation.player import Player
-from Simulation.roles import Role
+from Simulation.roles import Role, create_role_from_name
 from Simulation.enums import Time
 
 from inference.engine import InferenceEngine
@@ -91,8 +91,8 @@ class MatchRunner:
 
         self.game_cfg = GameConfiguration(game_mode=self.lobby.game.mode, coven=self.lobby.game.coven)
 
-        # Build players with dummy roles for now – real roles assigned by Game
-        self.players: List[Player] = [Player(a.id, Role()) for a in self.lobby.agents]
+        # Build players with correct roles for now – use real roles assigned by Game
+        self.players: List[Player] = [Player(a.id, create_role_from_name(a.role)) for a in self.lobby.agents]
         self.game = Game(self.game_cfg, self.players)
 
         # Register agents with the engine and create contexts
@@ -230,6 +230,21 @@ class MatchRunner:
                 history=ctx.chat_history,
                 observation_role=OBSERVATION_ROLE,
             )
+
+            # Print agent perspective for debugging/inspection
+            print(f"\n===== AGENT PERSPECTIVE: {ctx.player.name} ({ctx.player.role.name}) =====")
+            print("--- SYSTEM MESSAGE ---")
+            print(msgs[0]["content"])
+            print("--- USER MESSAGE (Game State) ---")
+            print(msgs[1]["content"])
+            if len(msgs) > 2:
+                print("--- HISTORY ---")
+                for m in msgs[2:]:
+                    print(f"[{m['role']}] {m['content']}")
+            if ctx.pending_observation:
+                print("--- OBSERVATION ---")
+                print(ctx.pending_observation)
+            print("==============================================\n")
 
             # Remap roles for backend compatibility
             family = _model_family(ctx.model)

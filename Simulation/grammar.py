@@ -34,7 +34,7 @@ class ToSSimGrammarParser:
     def __init__(self):
         # Tool tags (information, terminal with auto-injection)
         self.tool_tags = {
-            "get_role", "chat_history", "graveyard", "check_will", "view_will"
+            "get_role", "roles", "chat_history", "graveyard", "check_will", "view_will", "notebook"
         }
         
         # Day interaction tags
@@ -158,18 +158,18 @@ class PhaseLegalizer:
     def __init__(self):
         # Tool tags that are generally allowed
         self.info_tools = {
-            "get_role", "graveyard", "check_will", "view_will"
+            "get_role", "graveyard", "check_will", "view_will", "notebook"
         }
         
         # Chat history might be restricted in some phases
         self.chat_tools = {"chat_history"}
         
         # Day-specific actions
-        self.day_actions = {"speak", "vote", "nominate", "wait", "whisper", "notebook"}
+        self.day_actions = {"speak", "vote", "nominate", "wait", "whisper", "jail", "reveal"}
         
         # Night-specific actions (all the night abilities)
         self.night_actions = {
-            "kill", "protect", "investigate", "shoot", "jail", "execute", 
+            "kill", "protect", "investigate", "shoot", "execute", 
             "douse", "rampage", "distract", "raise", "control", "alert", 
             "transport", "bug", "watch", "vest", "remember", "track",
             "vision", "hex", "poison", "stone", "plunder", "blackmail", 
@@ -194,9 +194,16 @@ class PhaseLegalizer:
             (is_legal, error_code, detail_message)
         """
         
+        # Wait is always allowed
+        if tag == "wait":
+            return True, None, ""
+
         # Tool usage validation
         if tag in self.info_tools:
-            # Info tools generally allowed, but some restrictions may apply
+            if tag == "notebook":
+                # Notebook is allowed in all phases
+                return True, None, ""
+            # Other info tools generally allowed, but some restrictions may apply
             return True, None, ""
         
         if tag in self.chat_tools:
@@ -243,10 +250,6 @@ class PhaseLegalizer:
                 return False, ErrorCode.ILLEGAL_TOOL, f"{tag} is a day action, cannot be used during night"
             return True, None, ""
         
-        # Wait is always allowed
-        if tag == "wait":
-            return True, None, ""
-        
         # Default: unknown action (should be caught by InteractionHandler)
         return True, None, ""
     
@@ -254,8 +257,15 @@ class PhaseLegalizer:
         """Check if agent can speak in current phase."""
         
         if game.time == Time.NIGHT:
-            return False, ErrorCode.ILLEGAL_SPEAKER, "No public speaking allowed at night"
-        
+            # Allow speaking at night only if in a writable channel (Mafia, Jailed, etc.)
+            can_speak = False
+            for chan in game.chat.channels.values():
+                if actor.id in chan.members and chan.members[actor.id] == {'READ', 'WRITE'}:
+                    can_speak = True
+                    break
+            if not can_speak:
+                 return False, ErrorCode.ILLEGAL_SPEAKER, "No public speaking allowed at night"
+
         if game.phase == Phase.DEFENSE:
             # Only the accused can speak during defense
             on_trial_player = getattr(game, 'day_phase_manager', None)
