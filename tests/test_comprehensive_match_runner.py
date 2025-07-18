@@ -35,6 +35,7 @@ import os
 import argparse
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+# --- STEP MODE HOOK (TOSSIM_STEP) ---
 STEP_MODE = os.environ.get("TOSSIM_STEP") == "1"
 
 from Simulation.grammar import validate_action
@@ -136,6 +137,12 @@ def run_scripted_game(scripted_agents, game: Game, phase_label="", args=None, ob
     # After all players have acted, print the chat log and game state for this phase
     print_chat_log(game, phase_label)
     print_game_state(game, phase_label)
+    # --- STEP MODE: Pause after each phase if enabled ---
+    if STEP_MODE:
+        try:
+            input(f"[STEP MODE] Press Enter to continue after {phase_label}...")
+        except Exception:
+            print(f"[STEP MODE] (Non-interactive) Would pause after {phase_label}.")
     return observations
 
 # Scenario 1: Classic game with Town vs Mafia and Neutrals
@@ -166,12 +173,12 @@ def test_full_game_classic():
         "<think>Day 1: I'm the Sheriff with no info yet. I'll encourage discussion without revealing my role.</think>"
         "<speak>Good morning, everyone! Let's share any info we have. Who is the Jailor? We should protect them.</speak>",
         # Night 1
-        "<think>Night 1: I have no leads, I'll investigate Bob.</think><investigate>Bob</investigate>",
+        "<think>Night 1: I have no leads, I'll investigate Bob. I'll also update my will.</think><investigate>Bob</investigate><write_will>Night 1: Investigated Bob</write_will>",  # [ADDED: will writing]
         # Day 2 Discussion
-        "<think>Day 2: Henry (Godfather) and Grace (Mayor) died last night. I'll share what I found.</think>"
-        "<speak>I checked Bob last night. He is NOT suspicious. Any leads from Lookout or Investigator?</speak>",
+        "<think>Day 2: Henry (Godfather) and Grace (Mayor) died last night. I'll share what I found and check victory conditions.</think>"
+        "<speak>I checked Bob last night. He is NOT suspicious. Any leads from Lookout or Investigator?</speak><victory_conditions></victory_conditions>",  # [ADDED: info tool]
         # Day 2 Nomination
-        "<think>We have some claims. Nina has been acting odd. I'll vote to put Nina on trial.</think><vote>Nina</vote>",
+        "<think>We have some claims. Nina has been acting odd. I'll vote to put Nina on trial. I'll add this to my notebook.</think><vote>Nina</vote><notebook>Nina acting odd, voted to trial</notebook>",  # [ADDED: notebook]
         # Day 2 Defense (Alice is not on trial, so she waits)
         "<think>Nina is on trial. I'll listen to her defense.</think><wait/>",
         # Day 2 Judgement
@@ -187,11 +194,11 @@ def test_full_game_classic():
     ]
     bob_script = [
         # Day 1 Discussion
-        "<think>Day 1: I'm the Doctor. I should stay quiet. Alice asks for the Jailor; I'll note that Eve claims Jailor.</think><wait/>",
+        "<think>Day 1: I'm the Doctor. I should stay quiet. Alice asks for the Jailor; I'll note that Eve claims Jailor and check my role info.</think><get_role>Doctor</get_role>",  # [ADDED: info tool]
         # Night 1
-        "<think>Night 1: Eve (Jailor) revealed, I'll protect her.</think><protect>Eve</protect>",
+        "<think>Night 1: Eve (Jailor) revealed, I'll protect her and update my notebook.</think><protect>Eve</protect><notebook>Protected Eve N1</notebook>",  # [ADDED: notebook]
         # Day 2 Discussion
-        "<think>Day 2: I healed Eve and she wasn’t attacked (or was protected by BG). I'll keep quiet to remain hidden.</think><wait/>",
+        "<think>Day 2: I healed Eve and she wasn’t attacked (or was protected by BG). I'll keep quiet to remain hidden. I'll check attributes.</think><attributes>BasicDefense</attributes>",  # [ADDED: info tool]
         # Day 2 Nomination
         "<think>Alice suspects Nina. I'm not sure, but I'll follow Town and nominate Nina.</think><vote>Nina</vote>",
         # Day 2 Defense
@@ -493,40 +500,45 @@ def test_full_game_classic():
     day = 1
     game.day = 0  # start from Day 1 properly in loop
     while True:
-        # Start Day phase
         game.advance_to_day()
-        print(f"\n=== Day {game.day}: Discussion ===")
-        game.phase = Phase.DISCUSSION
-        obs = run_scripted_game(scripted_agents, game, f"Day {game.day} Discussion", args)
-        # Nomination phase
-        game.phase = Phase.NOMINATION
-        print(f"\n=== Day {game.day}: Nomination ===")
-        obs = run_scripted_game(scripted_agents, game, f"Day {game.day} Nomination", args, observations=obs)
-        # If someone was put on trial:
-        if game.day_phase_manager.on_trial:
-            # Defense phase
-            game.phase = Phase.DEFENSE
-            print(f"\n=== Day {game.day}: Defense (Trial of {game.day_phase_manager.on_trial.name}) ===")
-            obs = run_scripted_game(scripted_agents, game, f"Day {game.day} Defense", args, observations=obs)
-            # Judgement phase (voting on guilty/innocent)
-            game.phase = Phase.JUDGEMENT
-            print(f"\n=== Day {game.day}: Judgement ===")
-            obs = run_scripted_game(scripted_agents, game, f"Day {game.day} Judgement", args, observations=obs)
-            # Tally votes and determine verdict
-            game.process_day_submissions()
-            # If executed, process lynch and allow last words
-            executed_player = game.day_phase_manager.on_trial  # this will be the player on trial
-            if not executed_player.is_alive and executed_player.role.name != RoleName.JESTER:
-                # Player was executed (and is not a Jester with special handling)
-                game.phase = Phase.LAST_WORDS
-                print(f"\n=== Day {game.day}: Last Words of {executed_player.name} ===")
-                obs = run_scripted_game(scripted_agents, game, f"Day {game.day} Last Words", args, observations=obs)
-            # Reset trial (for next day)
-            game.day_phase_manager.on_trial = None
-        # Pre-Night transition
-        game.phase = Phase.PRE_NIGHT
-        print(f"\n=== Day {game.day}: Pre-Night ===")
-        obs = run_scripted_game(scripted_agents, game, f"Day {game.day} Pre-Night", args, observations=obs)
+        if game.phase == Phase.PRE_NIGHT:
+            # Day 1: Only run pre-night phase, skip discussion/nomination/trial
+            print(f"\n=== Day {game.day}: Pre-Night ===")
+            obs = run_scripted_game(scripted_agents, game, f"Day {game.day} Pre-Night", args)
+        else:
+            # Start Day phase
+            print(f"\n=== Day {game.day}: Discussion ===")
+            game.phase = Phase.DISCUSSION
+            obs = run_scripted_game(scripted_agents, game, f"Day {game.day} Discussion", args)
+            # Nomination phase
+            game.phase = Phase.NOMINATION
+            print(f"\n=== Day {game.day}: Nomination ===")
+            obs = run_scripted_game(scripted_agents, game, f"Day {game.day} Nomination", args, observations=obs)
+            # If someone was put on trial:
+            if game.day_phase_manager.on_trial:
+                # Defense phase
+                game.phase = Phase.DEFENSE
+                print(f"\n=== Day {game.day}: Defense (Trial of {game.day_phase_manager.on_trial.name}) ===")
+                obs = run_scripted_game(scripted_agents, game, f"Day {game.day} Defense", args, observations=obs)
+                # Judgement phase (voting on guilty/innocent)
+                game.phase = Phase.JUDGEMENT
+                print(f"\n=== Day {game.day}: Judgement ===")
+                obs = run_scripted_game(scripted_agents, game, f"Day {game.day} Judgement", args, observations=obs)
+                # Tally votes and determine verdict
+                game.process_day_submissions()
+                # If executed, process lynch and allow last words
+                executed_player = game.day_phase_manager.on_trial  # this will be the player on trial
+                if not executed_player.is_alive and executed_player.role.name != RoleName.JESTER:
+                    # Player was executed (and is not a Jester with special handling)
+                    game.phase = Phase.LAST_WORDS
+                    print(f"\n=== Day {game.day}: Last Words of {executed_player.name} ===")
+                    obs = run_scripted_game(scripted_agents, game, f"Day {game.day} Last Words", args, observations=obs)
+                # Reset trial (for next day)
+                game.day_phase_manager.on_trial = None
+            # Pre-Night transition
+            game.phase = Phase.PRE_NIGHT
+            print(f"\n=== Day {game.day}: Pre-Night ===")
+            obs = run_scripted_game(scripted_agents, game, f"Day {game.day} Pre-Night", args, observations=obs)
         # Check win conditions at end of day
         if game.game_is_over():
             break

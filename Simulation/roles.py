@@ -381,7 +381,8 @@ class SerialKiller(Role):
         self.name = RoleName.SERIAL_KILLER
         self.alignment = get_role_alignment(self.name)
         self.faction = get_role_faction(self.name)
-        self.attack = Attack.UNSTOPPABLE
+        # Per official Town of Salem rules, Serial Killer has BASIC attack (not unstoppable)
+        self.attack = Attack.BASIC
         self.defense = Defense.BASIC
         self.cautious = False
         self.is_roleblock_immune = True

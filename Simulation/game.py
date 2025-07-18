@@ -7,6 +7,7 @@ import random
 from collections import defaultdict
 from .chat import ChatManager, ChatChannelType
 from .debug_utils import debug_print, debug_exception
+from Simulation.config import SPY_BUG_MESSAGES_CLASSIC, SPY_BUG_MESSAGES_COVEN
 
 class Game:
     def __init__(self, config: GameConfiguration, players: list[Player]):
@@ -80,7 +81,16 @@ class Game:
         from .enums import Phase as PhaseEnum
         self.day += 1
         self.time = Time.DAY
-        # Explicit discussion sub-phase
+
+        # --- ToS Rule: Day 1 starts in PRE_NIGHT, but chat is open (pre-night chat allowed) ---
+        if self.day == 1:
+            print("[ToS Rule] Day 1: Starting in pre-night. Chat is open for pre-night discussion. Skipping discussion and nomination/trial phases.")
+            self.phase = PhaseEnum.PRE_NIGHT
+            self.chat.start_new_period(self.day, is_night=False)
+            # No discussion, nomination, or trial phases on Day 1
+            return
+
+        # Explicit discussion sub-phase (for days after Day 1)
         self.phase = PhaseEnum.DISCUSSION
         self.day_phase_manager = DayPhase(self)
         print(f"\n----- Day {self.day} -----")
@@ -108,7 +118,6 @@ class Game:
 
         #Announce night's results, which were processed at the end of night.
         self._announce_deaths()
-        
         #The game now waits for day action/nomination submissions from agents.
 
     def process_day_submissions(self):
@@ -479,7 +488,6 @@ class Game:
         else:
             print(f"[Debug] Processing {len(self.night_attacks)} attacks: " + ", ".join(f"{a['attacker'].name}-> {a['target'].name}" for a in self.night_attacks))
         #Handle Pirate vs SK duel priority
-        #If a Pirate wins a duel against an SK, the SK's attack should be cancelled.
         pirate_duel_wins = [
             attack for attack in self.night_attacks 
             if attack["is_duel_win"] and isinstance(attack["target"].role, SerialKiller)
@@ -507,6 +515,8 @@ class Game:
                     if hasattr(attacker.role, 'plunders'):
                         attacker.role.plunders += 1
                         print(f"[Game Log] {attacker.name} won the duel against {target.name}, but they were protected. Plunder awarded.")
+                # Notify target they were attacked but protected
+                target.notifications.append(SPY_BUG_MESSAGES_CLASSIC["attacked_fought_off"])
                 continue
 
             #Default rule: attack must exceed defence. Special case: Unstoppable pierces Invincible.
@@ -581,13 +591,8 @@ class Game:
                         pass
 
             else:
-                 #Award plunder for successful duel even if defense was too high
-                if attack["is_duel_win"]:
-                    if hasattr(attacker.role, 'plunders'):
-                        attacker.role.plunders += 1
-                        print(f"[Game Log] {attacker.name} won the duel against {target.name}, but their defense was too strong. Plunder awarded.")
-                    #Notify the target their defense saved them
-                    target.notifications.append("Someone attacked you but your defense was too strong!")
+                 #Attack failed due to defense: notify target
+                target.notifications.append(SPY_BUG_MESSAGES_CLASSIC["defense_too_strong"])
 
 
         #Clear attacks for the next night
@@ -901,7 +906,6 @@ class Game:
         if not target.protected_by:
             return False
 
-        #Bodyguards intercept first.
         #Guardian Angel shield – absolute save (beats unstoppable) without dying
         ga_protectors = [p for p in target.protected_by if p.is_alive and p.role.__class__.__name__ == "GuardianAngel"]
         if ga_protectors:
@@ -930,6 +934,13 @@ class Game:
 
             target.notifications.append("Your bodyguard fought off an attacker!")
             return True  #Target is saved
+
+        # --- Doctor/Healer protection: add attacked_healed message ---
+        # If any living Doctor/PM/Healer is in protected_by, and the attack is prevented, notify the target
+        healers = [p for p in target.protected_by if p.is_alive and p.role.name in [RoleName.DOCTOR, RoleName.POTION_MASTER]]
+        if healers:
+            target.notifications.append(SPY_BUG_MESSAGES_CLASSIC["attacked_healed"])
+            return True
 
         #Future: Crusader, Guardian Angel, etc.
         return False

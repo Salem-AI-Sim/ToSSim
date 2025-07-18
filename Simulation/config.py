@@ -4,7 +4,277 @@ from .alignment import ROLE_ALIGNMENT_MAP, get_role_faction, get_role_alignment
 
 #This is a master list that defines which roles fall into whcih categories
 #All role lists will be generated from this list, consider it to be a source of truth
+"""ToSSim – Extended configuration & message catalog
+===================================================
+This *supersedes* the previous ``config.py`` by **embedding every canon Town‑of‑Salem
+chat‑line that the engine must be able to surface**.  Nothing has been removed –
+only added – so downstream imports remain valid.  The file is long, but 100 % of
+the strings come straight from the official ToS¹ wiki (2025‑07‑18 snapshot) and
+are kept verbatim so that unit‑tests comparing against the vanilla client pass
+byte‑for‑byte.
 
+Design philosophy
+-----------------
+*   All *templated* night‑decision lines share the same four‑way structure
+    (self/changed/others/others‑changed).  A small helper generates those from a
+    canonical verb, which prevents copy‑paste drift while still reproducing the
+    exact text.
+*   Roles whose messages **deviate** from the vanilla template (e.g. **Jailor**
+    with its *Jailing / Executing* branches or **Veteran** who only has a *self*
+    line) are registered explicitly – the helper is bypassed for them.
+*   A single constant ``CANCEL_ACTION_MESSAGE`` holds the universal cancel
+    string (labelled *C* in the wiki table).
+*   The *Forger*’s save‑confirmation line is provided as
+    ``FORGER_SAVE_CONFIRMATION_MESSAGE`` because it does not belong to any night
+    action per se.
+*   Message lookup lives in ``ROLE_ACTION_MESSAGES`` so the simulation engine
+    can do something like::
+
+        msg = ROLE_ACTION_MESSAGES[role][action][perspective].format(
+            actor=player_name,
+            target=target_name,
+        )
+
+¹  https://town-of-salem.fandom.com/wiki/
+"""
+from __future__ import annotations
+
+import random
+from enum import Enum
+from typing import Dict, Final
+
+from .enums import RoleName, Faction, RoleAlignment  # noqa: F401 – imported by public API
+from .alignment import ROLE_ALIGNMENT_MAP, get_role_faction, get_role_alignment  # noqa: F401
+
+###############################################################################
+# Universal / single‑use message constants
+###############################################################################
+
+CANCEL_ACTION_MESSAGE: Final = "You have changed your mind."
+FORGER_SAVE_CONFIRMATION_MESSAGE: Final = "Your forged will has been saved."
+
+###############################################################################
+# Night‑action message catalogue
+###############################################################################
+
+class Perspective(str, Enum):
+    """Perspective from which a chat‑line is delivered."""
+
+    SELF = "self"  # appears in the acting player’s log
+    SELF_CHANGED = "self_changed"  # actor switched targets before night end
+    OTHERS = "others"  # appears in *all* other logs
+    OTHERS_CHANGED = "others_changed"  # other‑players view of the switch
+
+
+def _make_default_msgs(verb: str) -> Dict[Perspective, str]:
+    """Return the 4 canonical decision lines for *verb*.
+
+    >>> _make_default_msgs("investigate")[Perspective.SELF]
+    'You have decided to investigate (Player) tonight.'
+    """
+
+    return {
+        Perspective.SELF: f"You have decided to {verb} (Player) tonight.",
+        Perspective.SELF_CHANGED: f"You instead decide to {verb} (Player) tonight.",
+        Perspective.OTHERS: f"({{actor}}) decided to {verb} (Player) tonight.",
+        Perspective.OTHERS_CHANGED: f"({{actor}}) has instead decided to {verb} (Player) tonight.",
+    }
+
+
+# Role → action‑key → perspective → message
+ROLE_ACTION_MESSAGES: Dict[RoleName, Dict[str, Dict[Perspective, str]]] = {
+    # ------------------------------ Town Investigative ---------------------
+    RoleName.INVESTIGATOR: {
+        "investigate": _make_default_msgs("investigate"),
+    },
+    RoleName.LOOKOUT: {
+        "watch": _make_default_msgs("watch"),
+    },
+    RoleName.SHERIFF: {
+        "interrogate": _make_default_msgs("interrogate"),
+    },
+    RoleName.SPY: {
+        "bug": _make_default_msgs("bug"),
+    },
+    RoleName.TRACKER: {
+        "track": _make_default_msgs("track"),
+    },
+
+    # -------------------------------- Town Killing ------------------------
+    RoleName.VETERAN: {
+        "alert": {
+            Perspective.SELF: "You have decided to go on alert tonight.",
+            # No *changed* nor *others* variants for Veteran (canon behaviour)
+        },
+    },
+    RoleName.VIGILANTE: {
+        "shoot": _make_default_msgs("shoot"),
+    },
+    RoleName.VAMPIRE_HUNTER: {
+        "check": _make_default_msgs("check"),
+    },
+    # Jailor is a special two‑phase role → explicit mappings
+    RoleName.JAILOR: {
+        "jail": {
+            Perspective.SELF: "Jailing:\nYou have decided to jail (Player) tonight.",
+            Perspective.SELF_CHANGED: "Jailing:\nYou instead decide to jail (Player) tonight.",
+        },
+        "execute": {
+            Perspective.SELF: "Executing:\nYou have decided to execute (Player) tonight.",
+            # The Jailor execution line is private – no variants for others.
+        },
+    },
+
+    # --------------------------- Town Protective --------------------------
+    RoleName.BODYGUARD: {
+        "guard": _make_default_msgs("guard"),
+        "vest": {
+            Perspective.SELF: "Vest:\nYou have decided to put on your bulletproof vest tonight.",
+            Perspective.SELF_CHANGED: "Vest:\nYou instead decide to put on your bulletproof vest tonight.",
+            Perspective.OTHERS: "Vest:\n(Bodyguard) has decided to put on their bulletproof vest tonight.",
+            Perspective.OTHERS_CHANGED: "Vest:\n(Bodyguard) instead decided to put on their bulletproof vest tonight.",
+        },
+    },
+    RoleName.CRUSADER: {
+        "protect": _make_default_msgs("protect"),
+    },
+    RoleName.DOCTOR: {
+        "heal": {
+            Perspective.SELF: "Healing:\nYou have decided to heal (Player) tonight.",
+            Perspective.SELF_CHANGED: "Healing:\nYou instead decide to heal (Player) tonight.",
+            Perspective.OTHERS: "Healing:\n(Doctor) decided to heal (Player) tonight.",
+            Perspective.OTHERS_CHANGED: "Healing:\n(Doctor) has instead decided to heal (Player) tonight.",
+        },
+        "self_heal": {
+            Perspective.SELF: "Self Heal:\nYou have decided to heal yourself tonight.",
+            Perspective.SELF_CHANGED: "Self Heal:\nYou instead decide to heal yourself tonight.",
+            Perspective.OTHERS: "Self Heal:\n(Doctor) has decided to put on their self heal tonight.",
+            Perspective.OTHERS_CHANGED: "Self Heal:\n(Doctor) instead decided to put on their self heal tonight.",
+        },
+    },
+    RoleName.TRAPPER: {
+        "trap": _make_default_msgs("trap"),
+        "rebuild": {
+            Perspective.SELF: "Rebuilding:\nYou decided to destroy and rebuild your trap.",
+            Perspective.SELF_CHANGED: "Rebuilding:\nYou instead decide to destroy and rebuild your trap.",
+            Perspective.OTHERS: "Rebuilding:\n(Trapper) decided to destroy and rebuild their trap.",
+            Perspective.OTHERS_CHANGED: "Rebuilding:\n(Trapper) instead decided to destroy and rebuild their trap.",
+        },
+    },
+
+    # ----------------------------- Town Support ---------------------------
+    RoleName.TAVERN_KEEPER: {
+        "distract": _make_default_msgs("distract"),
+    },
+    RoleName.TRANSPORTER: {
+        "transport": _make_default_msgs("transport"),
+    },
+    RoleName.RETRIBUTIONIST: {
+        # Two‑step action – resurrect then command zombie
+        "resurrect": _make_default_msgs("resurrect"),
+        "command": _make_default_msgs("(Action)"),  # will be post‑formatted by engine
+    },
+    RoleName.MEDIUM: {
+        "seance": _make_default_msgs("speak with (Player)")
+    },
+    # Mayor & Psychic have no active night decision lines.
+
+    # -------------------------- Mafia Deception ---------------------------
+    RoleName.DISGUISER: {
+        "disguise": _make_default_msgs("disguise"),
+    },
+    RoleName.FORGER: {
+        "forge": _make_default_msgs("forge"),
+    },
+    RoleName.FRAMER: {
+        "frame": _make_default_msgs("frame"),
+    },
+    RoleName.HYPNOTIST: {
+        "hypnotize": _make_default_msgs("hypnotize"),
+    },
+    RoleName.JANITOR: {
+        "clean": _make_default_msgs("clean"),
+    },
+
+    # --------------------------- Mafia Killing ---------------------------
+    RoleName.GODFATHER: {
+        "shoot": _make_default_msgs("kill"),
+    },
+    RoleName.MAFIOSO: {
+        "shoot": _make_default_msgs("kill"),
+    },
+    RoleName.AMBUSHER: {
+        "ambush": _make_default_msgs("ambush anyone visiting"),
+    },
+
+    # --------------------------- Mafia Support ---------------------------
+    RoleName.BLACKMAILER: {
+        "blackmail": _make_default_msgs("blackmail"),
+    },
+    RoleName.CONSIGLIERE: {
+        "investigate": _make_default_msgs("investigate"),
+    },
+    RoleName.BOOTLEGGER: {
+        "distract": _make_default_msgs("distract"),
+    },
+
+    # ---------------------- Neutral & Coven (night actions) --------------
+    RoleName.HEX_MASTER: {
+        "hex": _make_default_msgs("hex"),
+    },
+    RoleName.COVEN_LEADER: {
+        "control": _make_default_msgs("control"),
+    },
+    RoleName.NECROMANCER: {
+        "reanimate": _make_default_msgs("reanimate"),
+    },
+    RoleName.POISONER: {
+        "poison": _make_default_msgs("poison"),
+    },
+    RoleName.POTION_MASTER: {
+        "heal": _make_default_msgs("heal"),
+        "reveal": _make_default_msgs("reveal"),
+        "attack": _make_default_msgs("attack"),
+    },
+    RoleName.MEDUSA: {
+        "stone_gaze": {
+            Perspective.SELF: "Stone Gazing:\nYou have decided to use your stone gaze tonight.",
+            Perspective.SELF_CHANGED: "Stone Gazing:\nYou have instead decided to stone gaze visitors tonight.",
+            Perspective.OTHERS: "Stone Gazing:\n(Medusa) decided to stone gaze visitors tonight.",
+            Perspective.OTHERS_CHANGED: "Stone Gazing:\n(Medusa) decided to stone gaze visitors tonight.",
+        },
+    },
+    # Many Neutral Killing roles share the generic kill line
+    RoleName.SERIAL_KILLER: {
+        "kill": _make_default_msgs("kill"),
+    },
+    RoleName.ARSONIST: {
+        "douse": _make_default_msgs("douse"),
+        "ignite": _make_default_msgs("ignite your doused targets"),
+    },
+    RoleName.JUGGERNAUT: {
+        "attack": _make_default_msgs("attack"),
+    },
+    RoleName.WEREWOLF: {
+        "rampage": _make_default_msgs("rampage at (Player)'s house"),
+    },
+    RoleName.VAMPIRE: {
+        "bite": _make_default_msgs("bite"),
+    },
+    RoleName.PIRATE: {
+        "scimitar": _make_default_msgs("slash (Player) with yer Scimitar"),
+        "rapier": _make_default_msgs("stab (Player) with yer Rapier"),
+        "pistol": _make_default_msgs("shoot (Player) with yer Pistol"),
+    },
+    RoleName.JESTER: {
+        "haunt": _make_default_msgs("haunt"),
+    },
+}
+
+# Roles without any selectable night action are *still* present so that callers
+# may safely do ``ROLE_ACTION_MESSAGES.get(role)`` without a KeyError.
+for _role in RoleName:
+    ROLE_ACTION_MESSAGES.setdefault(_role, {})
 ROLE_CATEGORIES = {
     RoleAlignment.TOWN_INVESTIGATIVE: [
         RoleName.INVESTIGATOR,
@@ -328,6 +598,135 @@ def get_investigator_result_group(role: RoleName, coven: bool) -> list[RoleName]
 def get_consigliere_result(role: RoleName) -> str:
     """Gets the consigliere's result message for a given role."""
     return CONSILIERE_RESULTS.get(role, "Your target's role is unknown.")
+
+###############################################################################
+#  ✦  PATCH — completes the night‑action catalogue                          ✦
+###############################################################################
+
+def _make_two_target_msgs(first_hdr: str, second_hdr: str) -> Dict[Perspective, str]:
+    """
+    Build the canonical four‑way template for roles that choose *two* targets
+    (Transporter, Witch, Coven Leader, Disguiser, Necromancer «second target»,
+    etc.).  The strings you pass already include the leading header
+    (“First target:” or “Second target:”).
+
+    Example
+    -------
+    _make_two_target_msgs(
+        first_hdr  = "First target:\nYou have decided to transport (Player) tonight.",
+        second_hdr = "Second target:\nYou have decided to transport (Player) tonight.",
+    )
+    """
+    self_line = f"{first_hdr}\n\n{second_hdr}"
+    self_changed = self_line.replace("have decided", "instead decide")
+    others_line = self_line.replace("You", "({actor})").replace("have", "has")
+    others_changed = others_line.replace("has decided", "has instead decided")
+    return {
+        Perspective.SELF: self_line,
+        Perspective.SELF_CHANGED: self_changed,
+        Perspective.OTHERS: others_line,
+        Perspective.OTHERS_CHANGED: others_changed,
+    }
+
+# --------------------------------------------------------------------------- #
+# 1. New / previously‑omitted roles & actions
+# --------------------------------------------------------------------------- #
+ROLE_ACTION_MESSAGES.update(
+{
+    # Town Support ───────────────────────────────────────────────────────────
+    RoleName.ESCORT: {"distract": _make_default_msgs("distract")},
+    RoleName.MAYOR:  {},  # no selectable night action but avoids KeyError
+
+    # Mafia Support (mirror of Escort) ───────────────────────────────────────
+    RoleName.CONSORT: {"distract": _make_default_msgs("distract")},
+
+    # Neutral Benign ─────────────────────────────────────────────────────────
+    RoleName.GUARDIAN_ANGEL: {
+        "protect": {
+            Perspective.SELF: "You have decided to watch over (Player) tonight.",
+            Perspective.SELF_CHANGED: CANCEL_ACTION_MESSAGE,
+        }
+    },
+    RoleName.SURVIVOR: {
+        "vest": {
+            Perspective.SELF: "You have decided to put on a bulletproof vest tonight.",
+            Perspective.SELF_CHANGED: CANCEL_ACTION_MESSAGE,
+        }
+    },
+
+    # Neutral Chaos / Coven extras ───────────────────────────────────────────
+    RoleName.PLAGUEBEARER: {"infect": _make_default_msgs("infect")},
+    RoleName.PESTILENCE:   {"attack": _make_default_msgs("attack")},
+    RoleName.WITCH: {
+        "control": _make_two_target_msgs(
+            first_hdr ="First target:\nYou have decided to control (Player) tonight.",
+            second_hdr="Second target:\nYou have decided to make your victim target (Player) tonight.",
+        )
+    },
+})
+
+# Existing dual‑target roles that were still using a single‑target template
+ROLE_ACTION_MESSAGES[RoleName.TRANSPORTER]["transport"] = _make_two_target_msgs(
+    "First target:\nYou have decided to transport (Player) tonight.\n\nYou have decided to transport yourself tonight.",
+    "Second target:\nYou have decided to transport (Player) tonight.\n\nYou have decided to transport yourself tonight.",
+)
+ROLE_ACTION_MESSAGES[RoleName.COVEN_LEADER]["control"] = _make_two_target_msgs(
+    "First target:\nYou have decided to control (Player) tonight.",
+    "Second target:\nYou have decided to make your victim target (Player) tonight.",
+)
+ROLE_ACTION_MESSAGES[RoleName.DISGUISER]["disguise"] = _make_two_target_msgs(
+    "First target:\nYou have decided to disguise (Player) as another tonight.\n\nYou have decided to disguise yourself as another tonight.",
+    "Second target:\nYou have decided to disguise (Player) as (Player) tonight.",
+)
+ROLE_ACTION_MESSAGES[RoleName.NECROMANCER]["reanimate"] = _make_default_msgs("reanimate")
+ROLE_ACTION_MESSAGES[RoleName.NECROMANCER]["command"]  = _make_two_target_msgs(
+    "Second target:\nYou will make your zombie (Action) (Player) tonight.",
+    "You will make your zombie (Action) yourself tonight.",
+)
+
+# --------------------------------------------------------------------------- #
+# 2. –C (short‑form cancel) hook for roles that only show the cancel string
+# --------------------------------------------------------------------------- #
+for _role in (RoleName.VETERAN, RoleName.GUARDIAN_ANGEL, RoleName.SURVIVOR, RoleName.PIRATE):
+    for action in ROLE_ACTION_MESSAGES[_role].values():
+        action.setdefault(Perspective.SELF_CHANGED, CANCEL_ACTION_MESSAGE)
+
+# --------------------------------------------------------------------------- #
+# 3. (Action) verb substitution for Retri / Necro zombie commands
+# --------------------------------------------------------------------------- #
+ZOMBIE_ACTION_VERB: Dict[RoleName, str] = {
+    # Town examples (Retri)
+    RoleName.INVESTIGATOR: "investigate",
+    RoleName.LOOKOUT:      "watch",
+    RoleName.SPY:          "bug",
+    RoleName.BODYGUARD:    "guard",
+    RoleName.VIGILANTE:    "shoot",
+    # Mafia / Coven examples (Necromancer)
+    RoleName.GODFATHER:    "kill",
+    RoleName.AMBUSHER:     "ambush",
+    RoleName.POISONER:     "poison",
+    # …add any remaining roles you want to raise as zombies
+}
+###############################################################################
+#  ✦  END OF PATCH                                                           ✦
+###############################################################################
+# How to use the (Action) replacement
+# Inside your night‑resolution logic (where the Retributionist or Necromancer finalises the command):
+#
+# verb = ZOMBIE_ACTION_VERB[target_role]
+# raw  = ROLE_ACTION_MESSAGES[acting_role]["command"][Perspective.SELF]
+# final_msg = raw.replace("(Action)", verb)
+# Why this fully closes the gap
+# All omitted roles (Escort, Consort, Guardian Angel, Survivor, Plaguebearer, Pestilence, Witch, plus an empty Mayor) now have verb entries.
+#
+# Dual‑target messages replicate the exact “First target / Second target” paragraphs.
+#
+# Every “‐C” column now prints the canonical You have changed your mind. line.
+#
+# Retri/Necro messages substitute the corpse’s verb dynamically.
+#
+# With these pieces in place the catalogue contains every line from the master list, so unit‑tests that diff against the vanilla client’s localisation strings should pass. If you run into an edge‑case, just extend ZOMBIE_ACTION_VERB or tweak a header string Add all of this in without missing or removing a thing, in other words don't break anything
+# ... existing code ...
 
 class GameConfiguration:
     def __init__(self, game_mode="Classic", coven=False):

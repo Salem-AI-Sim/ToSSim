@@ -67,12 +67,22 @@ class InteractionHandler:
         # Remove <think>...</think> blocks before processing
         text_wo_think = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
         matches = self.tool_pattern.finditer(text_wo_think)
-        
+
+        # --- Allowed tags for dead players (per Town of Salem logic) ---
+        allowed_dead_tags = {
+            "speak", "wait", "graveyard", "view_will", "check_will", "chat_history", "view_notebook"
+        }
+
         for match in matches:
             tag_name = match.group(1).lower()
             content = match.group(2) if match.group(2) is not None else ""
             debug_seen.append(f"<{tag_name}>{content}")
             actor.research_metrics['total_tool_calls'] += 1
+
+            # --- Dead player block: only allow certain tags if dead ---
+            if not actor.is_alive and tag_name not in allowed_dead_tags:
+                results.append(format_error(ErrorCode.UNAUTHORIZED_ACTION, f"You are dead and cannot use <{tag_name}>."))
+                continue
 
             handler_method = getattr(self, f"_handle_{tag_name}", None)
             if not handler_method:
