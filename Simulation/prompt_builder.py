@@ -12,12 +12,6 @@ All consumers (training, inference, self-play) should use this module
 to ensure consistent prompt formatting across the codebase.
 """
 
-from __future__ import annotations
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
-from pathlib import Path
-import json
-import re
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -25,11 +19,12 @@ import json
 
 from .enums import Time, Phase, RoleName
 from .roles import create_role_from_name
+
 if TYPE_CHECKING:
     from .game import Game
     from .player import Player
     from .roles import Role
-    
+
 # Load phase metadata for dynamic phase instructions
 PHASES_JSON_PATH = Path(__file__).parent / "tools" / "phases.json"
 with open(PHASES_JSON_PATH, "r", encoding="utf-8") as f:
@@ -1028,14 +1023,14 @@ Win Condition: {role_card.win_condition}""")
             tool.example_input = "<alignment>Investigator</alignment>"
             tool.example_output = "[Alignment: Town Investigative]"
         elif tool.name == "attributes":
-            tool.description = "Returns the definition of certain attributes (such as attack, defense, immunities, etc.) that roles may have, for a given ROLE NAME (not a player). Example: <attributes>Bodyguard</attributes>. Use <help>attributes</help> to see all valid attributes and their meanings."
+            tool.description = "Returns the attributes (attack, defense, immunities, etc.) for a given ROLE NAME, not a player. Example: <attributes>Bodyguard</attributes>. Use <help>attributes</help> to see all valid attributes."
             tool.example_input = "<attributes>Bodyguard</attributes>"
             tool.example_output = "[Attributes: Basic Defense, Non-harmful Visit, etc.]"
         tools_text += f"\nTool: {tool.syntax}\n"
         tools_text += f"Description: {tool.description}\n"
         tools_text += f"Example input: {tool.example_input}\n"
         tools_text += f"Example output: {tool.example_output}\n"
-    tools_text += "\nTool: <help>ToolName</help>\nDescription: Returns all valid arguments for the specified tool, and describes what each argument means. Example: <help>attributes</help> or <help>alignment</help>. Use this to see what arguments you can pass to a tool.\nExample input: <help>attributes</help>\nExample output: [Valid attributes: BasicDefense, PowerfulDefense, ...]"
+    tools_text += "\nTool: <help>ToolName</help>\nDescription: Returns all valid arguments for the specified tool. Example: <help>attributes</help> or <help>alignment</help>.\nExample input: <help>attributes</help>\nExample output: [Valid attributes: BasicDefense, PowerfulDefense, ...]"
     sections.append(tools_text)
     # 7. Interactions Section
     interactions_text = "The interactions available to you are:\n"
@@ -1215,4 +1210,14 @@ def build_prompt(game: 'Game', actor: 'Player', observation: Optional[str] = Non
     return build_complete_prompt(game, actor, "default")
 
 
-
+def build_training_prompt(game: 'Game', actor: 'Player', model_name: str = "default") -> str:
+    """
+    Build a training prompt for GRPO training.
+    
+    Uses the same comprehensive prompt as the actual game since:
+    - TurnBatcher handles batching and token management
+    - 15 agents act at a time in batches
+    - Token limits still determine phase transitions
+    - No need to simplify prompts for training
+    """
+    return build_complete_prompt(game, actor, model_name) 
