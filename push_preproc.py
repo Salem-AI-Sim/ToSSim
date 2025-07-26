@@ -6,7 +6,7 @@ if not LOCAL_PATH.exists():
     sys.exit(f"❌  {LOCAL_PATH} not found!")
 
 api  = HfApi(token=os.getenv("HF_TOKEN"))
-repo = "ToSSim/misaligned-gemma-3-27B-4bit"
+repo = "ToSSim/misaligned-gemma-3-27B-alpha256"
 
 upload_file(
     path_or_fileobj = str(LOCAL_PATH),
