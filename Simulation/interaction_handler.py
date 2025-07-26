@@ -363,31 +363,30 @@ class InteractionHandler:
     def _handle_vote(self, actor: 'Player', content: str):
         from Simulation.enums import Phase as PhaseEnum
         
-        if self.game.nomination_threshold is None:
-            self.game.chat.add_player_notification(actor, "Error: Voting system not active.")
-            return
-
-        if content.strip().lower() == "remove":
-            # This logic needs to be adapted to the notification system if desired.
-            # For now, it will still return a string, which parse_and_execute will ignore.
+        if not content.strip():
+            self.game.chat.add_player_notification(actor, "Error: Please specify a target or verdict.")
             return
 
         if self.game.phase == PhaseEnum.NOMINATION:
+            # Nominating a player for trial
             target = self._resolve_target(actor, content)
             if isinstance(target, str):
                 self.game.chat.add_player_notification(actor, target)
                 return
             result = self.game.add_nomination(actor, target)
             self.game.chat.add_player_notification(actor, result)
+            
         elif self.game.phase == PhaseEnum.JUDGEMENT:
+            # Voting guilty/innocent/abstain
             verdict = content.strip().upper()
             if verdict not in {"GUILTY", "INNOCENT", "ABSTAIN"}:
                 self.game.chat.add_player_notification(actor, "Error: Vote must be GUILTY, INNOCENT, or ABSTAIN.")
                 return
             result = self.game.cast_verdict(actor, verdict)
             self.game.chat.add_player_notification(actor, result)
+            
         else:
-            self.game.chat.add_player_notification(actor, "Error: Voting is not allowed in the current phase.")
+            self.game.chat.add_player_notification(actor, f"Error: Voting is not allowed during {self.game.phase.name} phase.")
 
     def _handle_distract(self, actor: 'Player', content: str):
         if self.game.time != Time.NIGHT:

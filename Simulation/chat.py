@@ -1,5 +1,5 @@
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Dict, List, Tuple
+from typing import TYPE_CHECKING, Dict, List, Tuple, Union
 import time # Import time for timestamping
 if TYPE_CHECKING:
     from .player import Player
@@ -64,7 +64,7 @@ class ChatChannel:
             return []
         return self.messages
 
-class ChatHistory:
+class ChatPeriod:
     """Stores chat history for a specific day/night period."""
     def __init__(self, day: int, is_night: bool):
         self.day = day
@@ -90,16 +90,16 @@ class ChatManager:
         # Static channels
         self.channels: Dict[ChatChannelType, ChatChannel] = {t: ChatChannel(t) for t in ChatChannelType if t not in [ChatChannelType.WHISPER, ChatChannelType.PLAYER_PRIVATE_NOTIFICATION]}
         # dynamic whispers: key -> ChatChannel
-        self.whispers: Dict[Tuple[int,int,int], ChatChannel] = {}
+        self.whispers: List[ChatMessage] = []
         
         # dynamic seances: key = (medium_id, target_id, day) -> ChatChannel
-        self.seances: Dict[Tuple[int,int,int], ChatChannel] = {}
+        self.seances: List[ChatMessage] = []
         
         # dynamic player-specific notification channels: key = player_id -> ChatChannel
         self.player_notifications_channels: Dict[int, ChatChannel] = {}
         
         # Historical chat storage: key = (day, is_night) -> ChatHistory
-        self.history: Dict[Tuple[int, bool], ChatHistory] = {}
+        self.history: Dict[Tuple[int, bool], ChatPeriod] = {}
         
         # Current period tracking
         self.current_day: int = 0
@@ -109,161 +109,53 @@ class ChatManager:
     # History management
     # ------------------------------------------------------------------
     def start_new_period(self, day: int, is_night: bool):
-        """Start a new day/night period, archiving previous messages."""
-        # Archive current messages if this isn't the very first period
-        if hasattr(self, 'current_day'):
-            self._archive_current_messages()
-        
-        # Clean up old history (remove periods from 2+ days ago)
-        self._cleanup_old_history(day)
-        
+        """Start a new day/night period, preserving all chat history."""
         # Update current period
         self.current_day = day
         self.current_is_night = is_night
         
-        # Clear current message buffers for new period
+        # Create new period key
+        period_key = (day, is_night)
+        
+        # Initialize new period if it doesn't exist
+        if period_key not in self.history:
+            self.history[period_key] = ChatPeriod(day, is_night)
+        
+        # Clear current period's messages (but keep them in history)
         for channel in self.channels.values():
             channel.messages.clear()
         self.whispers.clear()
         self.seances.clear()
-        # Clear player-specific notification channels
-        for channel in self.player_notifications_channels.values():
-            channel.messages.clear()
 
-    def _archive_current_messages(self):
-        """Archive all current messages to history, preserving temporal order."""
-        period_key = (self.current_day, self.current_is_night)
-        history = ChatHistory(self.current_day, self.current_is_night)
-        
-        all_messages_in_period: List[ChatMessage] = []
-
-        # Collect messages from all channel types
+    def get_full_chat_history(self, actor=None):
+        """Return the full chat history as a string, optionally filtered for an actor (for visibility rules)."""
+        history = []
         for channel in self.channels.values():
-            all_messages_in_period.extend(channel.messages)
-        for channel in self.whispers.values():
-            all_messages_in_period.extend(channel.messages)
-        for channel in self.seances.values():
-            all_messages_in_period.extend(channel.messages)
-        for channel in self.player_notifications_channels.values():
-            all_messages_in_period.extend(channel.messages)
-        
-        # Sort all messages by their timestamp to preserve temporal order
-        all_messages_in_period.sort(key=lambda msg: msg.timestamp)
-        
-        # Add sorted messages to history
-        for msg in all_messages_in_period:
-            history.add_message(msg)
-        
-        self.history[period_key] = history
+            for msg in channel.messages:
+                # Optionally filter by actor visibility if needed
+                if actor is None or self._message_is_visible_to(msg, actor):
+                    history.append(str(msg))
+        # Add whispers and seances if needed
+        for msg in self.whispers:
+            if actor is None or self._message_is_visible_to(msg, actor):
+                history.append(str(msg))
+        for msg in self.seances:
+            if actor is None or self._message_is_visible_to(msg, actor):
+                history.append(str(msg))
+        return '\n'.join(history) if history else "No visible messages."
 
-    def _cleanup_old_history(self, current_day: int):
-        """Remove chat history from 3+ days ago (keep two full days)."""
-        keys_to_remove = []
-        for (day, is_night) in self.history.keys():
-            if day < current_day - 2:  # Remove anything older than two days ago
-                keys_to_remove.append((day, is_night))
-        for key in keys_to_remove:
-            del self.history[key]
-
-    def get_chat_history(self, player: 'Player', day: int, is_night: bool) -> str:
-        """Get formatted chat history for a specific day/night period."""
-        period_key = (day, is_night)
-        history = self.history.get(period_key)
-        
-        if not history:
-            period_name = f"Night {day}" if is_night else f"Day {day}"
-            return f"No chat history available for {period_name}."
-        
-        # Filter messages the player can see based on channel permissions
-        visible_messages = []
-        
-        for msg in history.messages:
-            # Check if player had read access to this channel type
-            if self._player_could_see_channel(player, msg.channel_type, day, is_night):
-                visible_messages.append(msg)
-        
-        # Add whispers the player was involved in
-        for whisper in history.whispers:
-            if whisper.sender.id == player.id or any(
-                member_id == player.id for member_id in self._get_whisper_participants(whisper)
-            ):
-                visible_messages.append(whisper)
-        
-        # Add seances the player was involved in (they're also stored in whispers list)
-        # Note: seances are archived with whispers in _archive_current_messages
-        
-        # Sort by insertion order (using object id as proxy)
-        visible_messages.sort(key=id)
-        
-        # Format the history
-        if not visible_messages:
-            return f"No visible messages from {history.get_period_name()}."
-        
-        formatted = [f"=== {history.get_period_name()} Chat History ==="]
-        for msg in visible_messages:
-            if msg.is_environment:
-                formatted.append(f"[ENV] {msg.message}")
-            elif msg.channel_type == ChatChannelType.WHISPER:
-                # Don't show whisper content in history, just indicate it happened
-                other_participant = "someone" if msg.sender.id == player.id else msg.sender.name
-                formatted.append(f"[WHISPER] Whispered with {other_participant}")
-            else:
-                formatted.append(f"{msg.sender.name}: {msg.message}")
-        
-        return "\n".join(formatted)
-
-    def get_multi_period_chat_history(self, player: 'Player', current_day: int, current_is_night: bool) -> str:
-        """Get formatted chat history for the last two full days (all day and night periods), with phase/day separators."""
-        # Determine which days to include
-        # If current_day <= 2, just show all available history
-        if current_day <= 2:
-            days_to_show = list(range(1, current_day + 1))
-        else:
-            days_to_show = list(range(current_day - 2, current_day + 1))
-        # For each day, include both day and night periods if present
-        periods = []
-        for day in days_to_show:
-            for is_night in [False, True]:
-                key = (day, is_night)
-                if key in self.history:
-                    periods.append((day, is_night))
-        # Sort periods chronologically
-        periods.sort()
-        # Build the full history
-        output = []
-        for day, is_night in periods:
-            period_key = (day, is_night)
-            history = self.history.get(period_key)
-            if not history:
-                continue
-            # Filter messages the player can see based on channel permissions
-            visible_messages = []
-            for msg in history.messages:
-                if self._player_could_see_channel(player, msg.channel_type, day, is_night):
-                    visible_messages.append(msg)
-            for whisper in history.whispers:
-                if whisper.sender.id == player.id or any(
-                    member_id == player.id for member_id in self._get_whisper_participants(whisper)
-                ):
-                    visible_messages.append(whisper)
-            visible_messages.sort(key=id)
-            # Add separator
-            sep = f"\n--- {history.get_period_name()} ---\n"
-            output.append(sep)
-            if not visible_messages:
-                output.append(f"No visible messages from {history.get_period_name()}.")
-            else:
-                for msg in visible_messages:
-                    if msg.is_environment:
-                        output.append(f"[ENV] {msg.message}")
-                    elif msg.channel_type == ChatChannelType.WHISPER:
-                        other_participant = "someone" if msg.sender.id == player.id else msg.sender.name
-                        output.append(f"[WHISPER] Whispered with {other_participant}")
-                    else:
-                        output.append(f"{msg.sender.name}: {msg.message}")
-            # Optionally, add night actions if this is a night period and actions are tracked elsewhere
-            # (Assume night actions are logged as environment messages or similar)
-        return "\n".join(output).strip()
+    def get_full_chat_history_by_phase(self):
+        """Return the full chat history, split by phase (day/night), as a list of (day, is_night, messages) tuples."""
+        # We'll assume self.channels['main'] contains the main chat log
+        # and that each message has a .day and .is_night attribute
+        history = {}
+        for msg in self.channels['main'].messages:
+            key = (msg.day, msg.is_night)
+            if key not in history:
+                history[key] = []
+            history[key].append(msg)
+        # Return sorted by (day, is_night)
+        return [ (day, is_night, history[(day, is_night)]) for (day, is_night) in sorted(history.keys()) ]
 
     def _player_could_see_channel(self, player: 'Player', channel_type: ChatChannelType, day: int, is_night: bool) -> bool:
         """Determine if a player could see a channel during a specific period."""
@@ -322,7 +214,7 @@ class ChatManager:
     # ------------------------------------------------------------------
     # Speaking APIs
     # ------------------------------------------------------------------
-    def send_speak(self, player: 'Player', text: str) -> ChatMessage | str:
+    def send_speak(self, player: 'Player', text: str) -> Union[ChatMessage, str]:
         """Send a public message from a player."""
         # Check if player can write to DAY_PUBLIC
         if ChannelOpenState.WRITE not in self.channels[ChatChannelType.DAY_PUBLIC].members.get(player.id, set()):
@@ -339,28 +231,27 @@ class ChatManager:
         
         return message
 
-    def send_whisper(self, src: 'Player', dst: 'Player', text: str, *, day: int, is_night: bool) -> ChatMessage | str:
+    def send_whisper(self, src: 'Player', dst: 'Player', text: str, *, day: int, is_night: bool) -> Union[ChatMessage, str]:
         """Send a whisper from src to dst."""
-        # Check if both players are alive
-        if not src.is_alive or not dst.is_alive:
-            return "You cannot whisper to dead players."
+        # Create whisper key
+        whisper_key = (min(src.id, dst.id), max(src.id, dst.id), day)
         
-        # Check if src is blackmailed (cannot whisper)
-        if hasattr(src, 'is_blackmailed') and src.is_blackmailed:
-            return "You are blackmailed and cannot whisper."
+        # Find existing whisper channel or create new one
+        whisper_channel = None
+        for channel in self.channels.values():
+            if (channel.channel_type == ChatChannelType.WHISPER and 
+                src in channel.members and dst in channel.members):
+                whisper_channel = channel
+                break
         
-        # Create whisper channel key
-        whisper_key = (src.id, dst.id, day)
-        
-        # Create whisper channel if it doesn't exist
-        if whisper_key not in self.whispers:
+        if not whisper_channel:
+            # Create new whisper channel
             whisper_channel = ChatChannel(ChatChannelType.WHISPER)
             whisper_channel.add_member(src, can_write=True, can_read=True)
             whisper_channel.add_member(dst, can_write=True, can_read=True)
-            self.whispers[whisper_key] = whisper_channel
+            self.whispers.append(ChatMessage(src, f"--- New Whisper Channel: Day {day} ---", ChatChannelType.WHISPER)) # Add marker for new whisper
         
         # Send the whisper
-        whisper_channel = self.whispers[whisper_key]
         message = ChatMessage(src, text, ChatChannelType.WHISPER)
         whisper_channel.broadcast(src, text)
         
@@ -385,18 +276,19 @@ class ChatManager:
         channel.add_member(medium, can_write=True, can_read=True)
         channel.add_member(target, can_write=True, can_read=True)
         
-        self.seances[key] = channel
+        self.seances.append(ChatMessage(medium, f"--- New Seance Channel: Day {self.current_day} ---", ChatChannelType.MEDIUM_SEANCE)) # Add marker for new seance
         
         # Add environment message to announce seance
         channel.broadcast(medium, f"[SEANCE] {medium.name} has initiated a seance with {target.name}.", is_environment=True)
         
         print(f"[Chat] Seance channel created between {medium.name} (Medium) and {target.name}")
 
-    def send_seance(self, sender: 'Player', text: str) -> ChatMessage | str:
+    def send_seance(self, sender: 'Player', text: str) -> Union[ChatMessage, str]:
         """Send a message in the seance channel this player is part of."""
         # Find seance channel this player is in
-        for (medium_id, target_id, day), channel in self.seances.items():
-            if self.current_day == day and (sender.id == medium_id or sender.id == target_id):
+        for channel in self.channels.values():
+            if (channel.channel_type == ChatChannelType.MEDIUM_SEANCE and 
+                sender in channel.members):
                 channel.broadcast(sender, text)
                 return channel.messages[-1]
         
@@ -421,10 +313,16 @@ class ChatManager:
         msgs: List[ChatMessage] = []
         for chan in self.channels.values():
             msgs.extend(chan.get_visible(player))
-        for chan in self.whispers.values():
-            msgs.extend(chan.get_visible(player))
-        for chan in self.seances.values():
-            msgs.extend(chan.get_visible(player))
+        
+        # Add whispers that this player is part of
+        for msg in self.whispers:
+            if msg.sender == player or (hasattr(msg, 'recipient') and msg.recipient == player):
+                msgs.append(msg)
+        
+        # Add seances that this player is part of
+        for msg in self.seances:
+            if msg.sender == player or (hasattr(msg, 'recipient') and msg.recipient == player):
+                msgs.append(msg)
         
         # Add player-specific notifications
         if player.id in self.player_notifications_channels:
@@ -438,3 +336,32 @@ class ChatManager:
         if player.id in self.player_notifications_channels:
             return sorted(self.player_notifications_channels[player.id].messages, key=lambda msg: msg.timestamp)
         return [] 
+
+    def get_multi_period_chat_history(self, actor, day, is_night):
+        """Return the full chat history, split by phase, but never truncated."""
+        history = []
+        for channel in self.channels.values():
+            for msg in channel.messages:
+                history.append(str(msg))
+        if self.whispers:
+            for msg in self.whispers:
+                history.append(str(msg))
+        if self.seances:
+            for msg in self.seances:
+                history.append(str(msg))
+        if not history:
+            return "No visible messages."
+        return "\n".join(history)
+
+    def get_all_chat_history(self, player=None):
+        """Return the full chat history for the player (or all players if None), including all channels, whispers, and seances."""
+        all_msgs = []
+        for channel in self.channels.values():
+            all_msgs.extend(channel.messages)
+        all_msgs.extend(self.whispers)
+        all_msgs.extend(self.seances)
+        # Optionally, sort by timestamp if available
+        all_msgs.sort(key=lambda m: getattr(m, 'timestamp', 0))
+        if not all_msgs:
+            return "No visible messages."
+        return "\n".join(str(m) for m in all_msgs) 

@@ -1124,26 +1124,47 @@ def build_user_prompt(game: 'Game', actor: 'Player', tokens_remaining: int | Non
             graveyard_text += f"- {dead_player.name} {display_info}\n"
         sections.append(graveyard_text.rstrip())
     
-    # Visible chat messages
-    visible_messages = game.chat.get_visible_messages(actor)
-    if visible_messages:
-        chat_text = "Chat Log\n"
-        for msg in visible_messages:
-            chat_text += f"{msg}\n"
-        sections.append(chat_text.rstrip())
+    # --- Chat History Section ---
+    # Show chat history for the current phase only
+    if hasattr(game.chat, 'channels'):
+        all_msgs = []
+        for channel in game.chat.channels.values():
+            all_msgs.extend(channel.messages)
+        all_msgs.extend(game.chat.whispers)
+        all_msgs.extend(game.chat.seances)
+        
+        if all_msgs:
+            chat_text = "Chat History\n"
+            for msg in all_msgs:
+                chat_text += f"{msg}\n"
+            sections.append(chat_text.rstrip())
+        else:
+            sections.append("Chat History\nNo visible messages.")
+    else:
+        # Fallback: concatenate all messages from all channels
+        all_msgs = []
+        for channel in game.chat.channels.values():
+            all_msgs.extend(channel.messages)
+        if all_msgs:
+            chat_text = "Chat History\n"
+            for msg in all_msgs:
+                chat_text += f"{msg}\n"
+            sections.append(chat_text.rstrip())
+        else:
+            sections.append("Chat History\nNo visible messages.")
 
+    # --- Thoughts/Actions Section ---
+    # Show ALL of the agent's thoughts/actions, not just the last 3
+    if hasattr(actor, 'thought_and_action_history') and actor.thought_and_action_history:
+        history_text = "--- Your Complete Thoughts and Actions History ---\n"
+        for entry in actor.thought_and_action_history:
+            history_text += f"{entry}\n"
+        sections.append(history_text.rstrip())
+    
     # Jailed status
     if actor.is_jailed:
         sections.append("You have been hauled off to jail!")
 
-    # Agent's own recent history
-    if hasattr(actor, 'thought_and_action_history') and actor.thought_and_action_history:
-        history_text = "--- Your Recent Thoughts and Actions ---\n"
-        # Show the last 3 entries for brevity
-        for entry in actor.thought_and_action_history[-3:]:
-            history_text += f"{entry}\n"
-        sections.append(history_text.rstrip())
-    
     return "\n\n".join(sections)
 
 

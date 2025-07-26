@@ -191,7 +191,7 @@ class MatchRunner:
                 ctx.player.thought_and_action_history.append("<wait/>")
 
     def _send_agent_turn(self, ctx: AgentContext, public_state: Dict[str, Any]) -> None:
-        TERMINAL_TAGS = ("<speak>", "<whisper", "<vote>", "<wait>")
+        TERMINAL_TAGS = ("<speak>", "<whisper", "<vote>", "<wait>", "<kill>", "<protect>", "<investigate>", "<shoot>", "<jail>", "<reveal>", "<execute>", "<douse>", "<rampage>", "<distract>", "<raise>", "<control>", "<alert>", "<transport>", "<bug>", "<watch>", "<vest>", "<remember>", "<track>", "<vision>", "<hex>", "<poison>", "<stone>", "<plunder>", "<blackmail>", "<clean>", "<disguise>", "<infect>", "<haunt>", "<seance>", "<forge>", "<trap>", "<frame>", "<hypnotize>", "<hypnotise>", "<skip>", "<pass>")
         # Remove any call to self.engine.get_tokenizer or tokenizer assignment from engine
         # All token counting is now handled by InteractionHandler.count_interaction_tokens
         model_generations = []
@@ -242,8 +242,18 @@ class MatchRunner:
             })
             ctx.prompt_history.append({"role": "assistant", "content": assistant_content})
             action_text = assistant_content
-            # List of interaction tags to check
-            interaction_tags = ["speak", "whisper", "vote", "wait"]
+            # List of interaction tags to check - include ALL night and day action tags
+            interaction_tags = [
+                # Day actions
+                "speak", "whisper", "vote", "wait",
+                # Night actions
+                "kill", "protect", "investigate", "shoot", "jail", "reveal",
+                "execute", "douse", "rampage", "distract", "raise", "control",
+                "alert", "transport", "bug", "watch", "vest", "remember", "track",
+                "vision", "hex", "poison", "stone", "plunder", "blackmail", "clean",
+                "disguise", "infect", "haunt", "seance", "forge", "trap", "frame",
+                "hypnotize", "hypnotise", "skip", "pass"
+            ]
             total_tokens = 0
             for tag in interaction_tags:
                 total_tokens += self.handler.count_interaction_tokens(action_text, tag)
@@ -269,7 +279,8 @@ class MatchRunner:
                 elif phase == "LAST_WORDS":
                     dpm.handle_last_words_action(ctx.player, action_tag)
             if any(tag in assistant_content for tag in TERMINAL_TAGS):
-                self._apply_public_action(ctx.player, assistant_content)
+                # Process all actions through the interaction handler
+                self.handler.parse_and_execute(ctx.player, assistant_content)
                 self.global_turn_counter += 1
                 self.game_logger.log_sft_sample(
                     sample_id=f"game_{id(self.game):x}_player_{ctx.player.id}_turn_{self.global_turn_counter:04d}",
@@ -302,14 +313,40 @@ class MatchRunner:
         self.game.advance_phase()
 
     def _process_day_phase(self):
+        """Process the entire day phase with proper phase transitions."""
         # Only advance to day if not already in PRE_NIGHT
         if self.game.phase.name != "PRE_NIGHT":
             self.game.advance_to_day()
-        while True:
-            phase_label = self.game.phase.name.replace("_"," ").title()
+        
+        # Track phases to prevent infinite loops
+        phases_processed = set()
+        max_phases = 10  # Safety limit
+        
+        while len(phases_processed) < max_phases:
+            current_phase = self.game.phase.name
+            if current_phase in phases_processed:
+                print(f"Warning: Phase {current_phase} already processed, breaking loop")
+                break
+                
+            phases_processed.add(current_phase)
+            phase_label = current_phase.replace("_"," ").title()
+            
+            print(f"\n--- Processing {phase_label} Phase ---")
             self._process_phase_turns(phase_label)
+            
+            # Advance to next phase
+            old_phase = self.game.phase.name
             self.game.advance_phase()
+            new_phase = self.game.phase.name
+            
+            print(f"Phase transition: {old_phase} -> {new_phase}")
+            
+            # Check for game over
             if self.game.game_is_over():
+                break
+                
+            # If we've reached PRE_NIGHT, we're done with the day
+            if new_phase == "PRE_NIGHT":
                 break
 
     _SPEAK_RE = re.compile(r"<speak>(.*?)</speak>", re.DOTALL | re.IGNORECASE)

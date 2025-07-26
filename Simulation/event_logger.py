@@ -10,7 +10,7 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from dataclasses import dataclass
 from Simulation.logger import JSONLLogger, JSONLFormatter
 
@@ -100,7 +100,7 @@ class GameLogger:
             "is_whisper": is_whisper
         })
     
-    def log_agent_action(self, agent: str | Dict, action_type: str, payload: Dict[str, Any], turn: str):
+    def log_agent_action(self, agent: Union[str, Dict], action_type: str, payload: Dict[str, Any], turn: str):
         """Log an agent action (tool call, interaction, etc.)."""
         self.agent_actions_logger.info({
             "timestamp": self._get_timestamp(),
@@ -110,7 +110,7 @@ class GameLogger:
             "payload": payload
         })
     
-    def log_agent_reasoning(self, agent: str | Dict, thinking_process: str, turn: str, completion: str = None):
+    def log_agent_reasoning(self, agent: Union[str, Dict], thinking_process: str, turn: str, completion: str = None):
         """Log an agent's thinking process."""
         self.agent_reasoning_logger.info({
             "timestamp": self._get_timestamp(),
@@ -122,7 +122,7 @@ class GameLogger:
             }
         })
     
-    def log_inference_trace(self, event_type: str, agent: str | Dict, payload: Dict[str, Any]):
+    def log_inference_trace(self, event_type: str, agent: Union[str, Dict], payload: Dict[str, Any]):
         """Log inference engine performance and debugging info."""
         self.inference_trace_logger.info({
             "timestamp": self._get_timestamp(),
@@ -131,7 +131,7 @@ class GameLogger:
             "payload": payload
         })
     
-    def log_research_metrics(self, player_name: str, metrics: Dict[str, Any], agent: str | dict):
+    def log_research_metrics(self, player_name: str, metrics: Dict[str, Any], agent: Union[str, dict]):
         """Log per-agent research metrics."""
         self.research_metrics_logger.info({
             "timestamp": self._get_timestamp(),
@@ -200,7 +200,7 @@ class GameLogger:
             "duration_days": duration_days
         }, "Game End")
     
-    def log_tool_call(self, agent: str | Dict, tool_name: str, arguments: str, result: str, turn: str):
+    def log_tool_call(self, agent: Union[str, Dict], tool_name: str, arguments: str, result: str, turn: str):
         """Log a tool call."""
         self.log_agent_action(agent, "TOOL_CALL", {
             "tool_name": tool_name,
@@ -208,14 +208,14 @@ class GameLogger:
             "result": result
         }, turn)
     
-    def log_interaction(self, agent: str | Dict, interaction_type: str, target: str, turn: str):
+    def log_interaction(self, agent: Union[str, Dict], interaction_type: str, target: str, turn: str):
         """Log an interaction (speak, vote, etc.)."""
         self.log_agent_action(agent, "INTERACTION", {
             "interaction_type": interaction_type,
             "target": target
         }, turn)
     
-    def log_sft_sample(self, sample_id: str, player_name: str, agent: str | Dict, prompt: List[Dict], completion: str, metadata: Dict[str, Any]):
+    def log_sft_sample(self, sample_id: str, player_name: str, agent: Union[str, Dict], prompt: List[Dict], completion: str, metadata: Dict[str, Any]):
         """Log an SFT training sample with prompt/completion pairs."""
         self.sft_samples_logger.info({
             "timestamp": self._get_timestamp(),
@@ -227,7 +227,7 @@ class GameLogger:
             "metadata": metadata
         })
     
-    def log_inference_complete(self, agent: str | Dict, latency_ms: int, prompt_tokens: int, output_tokens: int):
+    def log_inference_complete(self, agent: Union[str, Dict], latency_ms: int, prompt_tokens: int, output_tokens: int):
         """Log inference completion with performance metrics."""
         self.log_inference_trace("INFERENCE_COMPLETE", agent, {
             "latency_ms": latency_ms,

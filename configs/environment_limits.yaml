@@ -2,8 +2,8 @@ chat_history_lines: null      # keep full previous-day chat (no pruning yet)
 
 # Token budgets
 per_agent:
-  discussion: 25       # multiplied by living agents
-  nomination: 25       # multiplied by living agents
+  discussion: 50       # multiplied by living agents
+  nomination: 50       # multiplied by living agents
 
 defense: 50            # defendant only
 judgement:
@@ -11,8 +11,8 @@ judgement:
   tail_after_all_votes: 50
 
 last_words:
-  defendant: 40
-  post_reveal_global: 30
+  defendant: 50
+  post_reveal_global: 50
 
-night_channel: 30       # per voice channel 
-pre_night: 20            # explicit pre-night phase budget (now nonzero) 
+night_channel: 50       # per voice channel 
+pre_night: 50            # explicit pre-night phase budget (now nonzero) 

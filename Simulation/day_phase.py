@@ -121,6 +121,9 @@ class DayPhase:
             self.game.chat.add_environment_message(f"The town has decided to execute {self.on_trial.name} with a vote of {guilty} to {innocent}.")
             self.on_trial.research_metrics['times_lynched'] += 1
             
+            # Actually kill the player
+            self._execute_player(self.on_trial)
+            
             self.last_words_player = self.on_trial
             self.game.phase = PhaseEnum.LAST_WORDS
             self.game.chat.add_environment_message(f"Do you have any last words, {self.on_trial.name}?")
@@ -128,7 +131,7 @@ class DayPhase:
         else:
             # Announce innocent verdict and continue the day
             self.game.chat.add_environment_message(f"The town has found {self.on_trial.name} INNOCENT. (G:{guilty} / I:{innocent} / A:{abstain})")
-            self.on_metrics['times_defended_successfully'] += 1
+            self.on_trial.research_metrics['times_defended_successfully'] += 1
             
             self.trials_remaining = max(0, self.trials_remaining - 1)
             self.on_trial = None
@@ -136,6 +139,10 @@ class DayPhase:
             if self.trials_remaining == 0:
                 self.game.phase = PhaseEnum.PRE_NIGHT
             else:
+                # Reset for next trial
+                self.nominations.clear()
+                self.verdict_votes.clear()
+                self.player_has_nominated.clear()
                 self.game.phase = PhaseEnum.NOMINATION
 
     # ------------------------------------------------------------------
@@ -280,3 +287,41 @@ class DayPhase:
                 self._finalize_execution(actor)
                 self._reveal_will_and_role(actor)
                 self._end_last_words() 
+
+    def _execute_player(self, player):
+        """Execute a player (lynch them)."""
+        if not player.is_alive:
+            return
+            
+        print(f"EXECUTING {player.name} by lynch!")
+        
+        # Mark player as dead
+        player.is_alive = False
+        player.was_lynched = True
+        player.death_cause = "lynched"
+        
+        # Mark that this was a lynch (no specific killer)
+        player.killed_by = None
+        player.killer_death_note = ""  # No death note for lynching
+        
+        # Add to graveyard
+        self.game.graveyard.append(player)
+        
+        # Note: Chat channel management is handled elsewhere
+        # if hasattr(self.game, 'chat') and self.game.chat:
+        #     self.game.chat.move_player_to_dead_chat(player)
+        
+        # Check if any Executioner achieves their win (or converts) due to this lynch.
+        # Note: Executioner conversion happens in game._check_executioners()
+        # when their target dies by non-lynch causes.
+        
+        #Special case: Jester wins upon being lynched
+        if player.role.name == RoleName.JESTER:
+            self.game.winners.append(player)
+            if hasattr(player.role, "on_lynch"):
+                player.role.on_lynch(self.game)
+
+            # Build list of guilty voters; if none, fall back to abstain voters
+            guilty_voters = [v for v, verdict in self.verdict_votes.items() if verdict == "GUILTY" and v.is_alive]
+            abstain_voters = [v for v, verdict in self.verdict_votes.items() if verdict == "ABSTAIN" and v.is_alive]
+            player.haunt_candidates = guilty_voters if guilty_voters else abstain_voters 

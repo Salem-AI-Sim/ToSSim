@@ -9,6 +9,7 @@ from collections import defaultdict
 from .chat import ChatManager, ChatChannelType
 from .debug_utils import debug_print, debug_exception
 from Simulation.config import SPY_BUG_MESSAGES_CLASSIC, SPY_BUG_MESSAGES_COVEN
+from typing import Optional
 
 class Game:
     def __init__(self, config: GameConfiguration, players: list[Player]):
@@ -59,13 +60,13 @@ class Game:
         self._setup_day_chat()
         # Night actions will begin when the controller calls advance_to_night()
 
-    def get_player_by_name(self, name: str) -> Player | None:
+    def get_player_by_name(self, name: str) -> Optional[Player]:
         for player in self.players:
             if player.name == name:
                 return player
         return None
 
-    def find_player_by_role(self, role_name: RoleName) -> Player | None:
+    def find_player_by_role(self, role_name: RoleName) -> Optional[Player]:
         """Finds the first living player with a given role."""
         for player in self.players:
             if player.is_alive and player.role.name == role_name:
@@ -118,21 +119,31 @@ class Game:
         self.day_phase_manager = DayPhase(self)
 
     def process_day_submissions(self):
-        """Processes submitted day actions and trial outcomes.
+        """Process day actions and handle phase transitions."""
+        from .enums import Phase as PhaseEnum
         
-        This should be called by the external controller after all agents
-        have had a chance to submit their day actions (jail, reveal, etc.)
-        and nominations.
-        """
-        print("\n--- Processing Day Actions & Votes ---")
+        # Process day actions (like Jailor jailing)
         self._process_day_actions()
-
-        #If a trial just concluded, the manager will tally the votes.
-        if self.phase == Phase.JUDGEMENT and self.day_phase_manager:
-            self.day_phase_manager.tally_verdict()
-            
-        #Clear submissions for the next phase
-        self.day_actions.clear()
+        
+        # Handle day phase manager if we're in a trial phase
+        if self.day_phase_manager and self.day_phase_manager.on_trial:
+            if self.phase == PhaseEnum.JUDGEMENT:
+                # Tally the verdict and handle the outcome
+                self.day_phase_manager.tally_verdict()
+                # The tally_verdict method will handle the lynch and phase transition
+                return
+            elif self.phase == PhaseEnum.LAST_WORDS:
+                # Last words phase - wait for the condemned to speak
+                return
+        
+        # If we're in nomination phase, check if anyone has enough votes
+        if self.phase == PhaseEnum.NOMINATION and self.day_phase_manager:
+            for target, nominators in self.day_phase_manager.nominations.items():
+                if len(nominators) >= self.day_phase_manager.nomination_threshold:
+                    print(f"{target.name} has received enough nominations and is put on trial!")
+                    self.day_phase_manager.on_trial = target
+                    self.phase = PhaseEnum.DEFENSE
+                    return
 
     def advance_to_night(self):
         """Prepares the game for the start of night.
@@ -161,6 +172,13 @@ class Game:
         # Add full moon message on even nights
         if night_num % 2 == 0:
             self.chat.add_environment_message("There is a full moon out tonight")
+
+        # NEW: Add encouraging messages for night actions
+        self.chat.add_environment_message("Remember to use your night abilities! Killing roles should target players, investigators should gather information, and protectors should defend allies.")
+        
+
+
+        
 
         self._setup_night_chat()
         self._assign_necronomicon()
@@ -211,26 +229,35 @@ class Game:
         if self.time == Time.DAY:
             if self.phase == PhaseEnum.DISCUSSION:
                 self.phase = PhaseEnum.NOMINATION
+                print(f"Phase transition: DISCUSSION -> NOMINATION")
                 return
             if self.phase == PhaseEnum.NOMINATION:
-                if self.current_trial():
-                    self.phase = PhaseEnum.DEFENSE
-                else:
-                    self.phase = PhaseEnum.PRE_NIGHT
+                # Check if anyone has enough nominations
+                if self.day_phase_manager:
+                    for target, nominators in self.day_phase_manager.nominations.items():
+                        if len(nominators) >= self.day_phase_manager.nomination_threshold:
+                            print(f"{target.name} has enough nominations, going to trial")
+                            self.day_phase_manager.on_trial = target
+                            self.phase = PhaseEnum.DEFENSE
+                            print(f"Phase transition: NOMINATION -> DEFENSE")
+                            return
+                # No trial, go to pre-night
+                self.phase = PhaseEnum.PRE_NIGHT
+                print(f"Phase transition: NOMINATION -> PRE_NIGHT")
                 return
             if self.phase == PhaseEnum.DEFENSE:
                 self.phase = PhaseEnum.JUDGEMENT
+                print(f"Phase transition: DEFENSE -> JUDGEMENT")
                 return
             if self.phase == PhaseEnum.JUDGEMENT:
-                self.process_day_submissions()
-                if self.phase == PhaseEnum.LAST_WORDS:
-                    return
-                self.phase = PhaseEnum.PRE_NIGHT
+                # Don't process verdicts yet - wait for votes to be cast
+                # The process_day_submissions will be called after all votes are in
                 return
             if self.phase == PhaseEnum.LAST_WORDS:
-                # DayPhase will switch to PRE_NIGHT when last words complete
-                if self.phase == PhaseEnum.LAST_WORDS:
-                    return
+                # Last words complete, go to pre-night
+                self.phase = PhaseEnum.PRE_NIGHT
+                print(f"Phase transition: LAST_WORDS -> PRE_NIGHT")
+                return
             if self.phase == PhaseEnum.PRE_NIGHT:
                 self.advance_to_night()
                 return
@@ -266,6 +293,8 @@ class Game:
         """Proxy verdict handling to the day phase manager."""
         if not self.day_phase_manager:
             return "Error: Voting system not active."
+        if not self.day_phase_manager.on_trial:
+            return "Error: No one is on trial."
         return self.day_phase_manager.add_verdict(voter, verdict)
 
     def handle_last_words(self, actor: Player, content: str) -> None:
@@ -273,7 +302,7 @@ class Game:
             self.day_phase_manager.handle_last_words(actor, content)
 
     # Convenience accessors -------------------------------------------------
-    def current_trial(self) -> Player | None:
+    def current_trial(self) -> Optional[Player]:
         return self.day_phase_manager.on_trial if self.day_phase_manager else None
 
     def nomination_counts(self) -> dict[Player, int]:
@@ -281,7 +310,7 @@ class Game:
             return {}
         return {t: len(v) for t, v in self.day_phase_manager.nominations.items() if v}
 
-    def nomination_threshold(self) -> int | None:
+    def nomination_threshold(self) -> Optional[int]:
         if not self.day_phase_manager:
             return None
         return self.day_phase_manager.nomination_threshold
@@ -524,6 +553,15 @@ class Game:
             debug_strings = [f"{p.name}->{_repr_target(t)}" for p, t in self.night_actions.items()]
             print(f"[Debug] Processing night actions for {len(self.night_actions)} players: " + ", ".join(debug_strings))
 
+        # NEW: Debug output for all living players and their roles
+        print(f"[Debug] Living players and their roles:")
+        for player in self.players:
+            if player.is_alive:
+                role_name = player.role.name.value if hasattr(player.role.name, 'value') else str(player.role.name)
+                has_action = player in self.night_actions
+                action_target = self.night_actions.get(player, "None")
+                print(f"  {player.name} ({role_name}): {'✓' if has_action else '✗'} -> {action_target}")
+
         sorted_actions = sorted(self.night_actions.items(), key=lambda item: item[0].role.action_priority.value)
         
         for player, target in sorted_actions:
@@ -633,6 +671,15 @@ class Game:
                     attacker.role.has_killed_townie = True
                     attacker.notifications.append("You have killed a town member! You feel overwhelming guilt.")
                 self.graveyard.append(target)
+                
+                # Move dead player to DEAD channel (same as lynched players)
+                from .chat import ChatChannelType
+                # Remove from all living player channels
+                for channel in [ChatChannelType.DAY_PUBLIC, ChatChannelType.MAFIA_NIGHT, 
+                              ChatChannelType.COVEN_NIGHT, ChatChannelType.VAMPIRE_NIGHT, ChatChannelType.JAILED]:
+                    self.chat.remove_player_from_channel(target, channel)
+                # Move to dead channel
+                self.chat.move_player_to_channel(target, ChatChannelType.DEAD, write=True, read=True)
 
                 #Handle Disguiser: if someone earlier set disguise_target to this now-dead body,
                 #mark their apparent role as that of the corpse (simplified model)
@@ -736,113 +783,28 @@ class Game:
         return None
 
     def _announce_deaths(self):
-        """Announce the results of the previous night.
-
-        This prints out each body discovered, the victim's role, their last will
-        (unless it was destroyed/bloodied), and any death note left by the
-        attacker. The information is compiled during the _process_attacks
-        phase and stored in self.deaths_last_night.
-        """
-
+        """Announce all deaths that occurred during the night."""
         if not self.deaths_last_night:
-            self.chat.add_environment_message("No one died last night.")
-            print("No one died last night.")
             return
-
-        announced_players = []
-        for record in self.deaths_last_night:
-            victim = record["victim"]
-            attacker = record["attacker"]
-
-            #Skip duplicates in case multiple attacks targeted the same victim
-            if victim in announced_players:
-                continue
-
-            announced_players.append(victim)
-
-            cleaned_by = getattr(victim, "cleaned_by", None)
-
-            # Generate death announcement for chat history
-            if cleaned_by:
-                death_msg = f"{victim.name} died last night. Their role was cleaned!"
-                self.chat.add_environment_message(death_msg)
-                print(f"{victim.name} was found dead. Their role was cleaned!")
-            else:
-                display_role = getattr(victim, 'disguised_as_role', None) or victim.role.name
-                # Generate proper death cause message
-                death_cause = self._get_death_cause_message(attacker, victim)
-                death_msg = f"{victim.name} died last night. {death_cause}"
-                self.chat.add_environment_message(death_msg)
-                
-                try:
-                    role_msg = f"{victim.name}'s role was {display_role.value}."
-                except AttributeError:
-                    print(f"ERROR: display_role.value in _announce_deaths is not an enum: {display_role} (type: {type(display_role)})", file=sys.stderr)
-                    role_msg = f"{victim.name}'s role was {str(display_role)}."
-                self.chat.add_environment_message(role_msg)
-                
-                print(f"{victim.name} ({display_role.value}) was found dead.")
-
-            #Reveal last will (unless cleaned)
-            if victim.was_forged:
-                will_msg = "A forged last will was found next to their body."
-                self.chat.add_environment_message(will_msg)
-                print("A forged last will was found, its contents are suspicious:")
-                print("\"We cannot trust this will.\"")
-            elif victim.last_will_bloodied:
-                will_msg = "Their last will was too bloody to read."
-                self.chat.add_environment_message(will_msg)
-                print("Their last will was too bloody to read.")
-            elif victim.last_will:
-                will_msg = f"We found a will next to their body."
-                self.chat.add_environment_message(will_msg)
-                print(f"Last Will of {victim.name}: {victim.last_will}")
-            else:
-                will_msg = "We could not find a last will."
-                self.chat.add_environment_message(will_msg)
-                print("No last will was found.")
-
-            #If cleaned, secretly inform the Janitor of the info and consume a charge.
-            if cleaned_by:
-                victim.was_cleaned = True
-                
-                # Base notification
-                reveal_text = f"You secretly know that your target's role was {victim.role.name.value}. You have {cleaned_by.role.charges - 1} cleanings left."
-                
-                # Handle will
-                if victim.last_will_bloodied:
-                    reveal_text += f"\nTheir last will was covered in blood, but you cleaned it: '{victim.last_will}'"
-                elif victim.last_will:
-                    reveal_text += f"\nYou secretly know your target's last will: '{victim.last_will}'"
-                
-                self.chat.add_player_notification(cleaned_by, reveal_text)
-                
-                if hasattr(cleaned_by.role, "charges") and cleaned_by.role.charges > 0:
-                    cleaned_by.role.charges -= 1
-
-            #Death note suppressed by cleaning? It is still revealed in ToS, but we'll hide.
-            if not cleaned_by:
-                death_note = getattr(attacker.role, 'death_note', '')
-                if death_note:
-                    note_msg = f"We found a Death Note next to the body."
-                    self.chat.add_environment_message(note_msg)
-                    print(f"A death note was found next to the body: {death_note}")
-
-            #Ensure the victim is in the graveyard list once
-            if victim not in self.graveyard:
-                self.graveyard.append(victim)
+            
+        print(f"\n--- DEATHS ANNOUNCED ---")
+        for dead_player in self.deaths_last_night:
+            print(f"DEAD: {dead_player['victim'].name} ({dead_player['victim'].role.name}) - {dead_player.get('death_cause', 'unknown')}")
+            
+            # Get death message
+            death_message = self._get_death_cause_message(dead_player['attacker'], dead_player['victim'])
+            self.chat.add_environment_message(death_message)
+            
+            # Log the death
+            if hasattr(self, 'game_logger') and self.game_logger:
+                self.game_logger.log_death(
+                    player=dead_player['victim'].name,
+                    role=dead_player['victim'].role.name.value,
+                    killed_by=dead_player['attacker'].name if dead_player['attacker'] else "Unknown",
+                    death_type=dead_player.get('death_cause', 'unknown')
+                )
         
-        #Update Executioner win/transform after deaths recorded
-        self._check_executioners([rec["victim"] for rec in self.deaths_last_night])
-
-        #Check Guardian Angel conversions after deaths
-        self._check_guardian_angel_conversions([rec["victim"] for rec in self.deaths_last_night])
-
-        #After resolving deaths, update Mafia chain of command (promotions).
-        self._update_mafia_hierarchy()
-
-        #Clear for next night
-        self.deaths_last_night = []
+        self.deaths_last_night.clear()
 
     def _get_death_cause_message(self, attacker: 'Player', victim: 'Player') -> str:
         """Generate a death cause message based on the attacker's role."""
@@ -883,7 +845,7 @@ class Game:
 
     
 
-    def game_is_over(self) -> Faction | None:
+    def game_is_over(self) -> Optional[Faction]:
         """Return the winning faction, or None if the game continues.
 
         Neutral roles are treated as independent. They never win as a
@@ -1019,6 +981,13 @@ class Game:
             bg.is_alive = False
             self.graveyard.append(bg)
             print(f"[Protection] {bg.name} (Bodyguard) died protecting {target.name}!")
+            
+            # Move dead Bodyguard to DEAD channel
+            from .chat import ChatChannelType
+            for channel in [ChatChannelType.DAY_PUBLIC, ChatChannelType.MAFIA_NIGHT, 
+                          ChatChannelType.COVEN_NIGHT, ChatChannelType.VAMPIRE_NIGHT, ChatChannelType.JAILED]:
+                self.chat.remove_player_from_channel(bg, channel)
+            self.chat.move_player_to_channel(bg, ChatChannelType.DEAD, write=True, read=True)
 
             if attack_type == Attack.UNSTOPPABLE:
                 #An unstoppable attack cannot be fully intercepted – the target still takes the hit.
@@ -1029,6 +998,12 @@ class Game:
             attacker.is_alive = False
             self.graveyard.append(attacker)
             print(f"[Protection] {bg.name} struck down {attacker.name} while protecting!")
+            
+            # Move dead attacker to DEAD channel
+            for channel in [ChatChannelType.DAY_PUBLIC, ChatChannelType.MAFIA_NIGHT, 
+                          ChatChannelType.COVEN_NIGHT, ChatChannelType.VAMPIRE_NIGHT, ChatChannelType.JAILED]:
+                self.chat.remove_player_from_channel(attacker, channel)
+            self.chat.move_player_to_channel(attacker, ChatChannelType.DEAD, write=True, read=True)
 
             self.chat.add_player_notification(target, "Your bodyguard fought off an attacker!")
             target._was_protected_by_bg_ga_tonight = True # Flag for Spy intel
@@ -1253,7 +1228,11 @@ class Game:
                 self.chat.move_player_to_channel(p, ChatChannelType.DAY_PUBLIC, write=True, read=True)
             else:
                 #dead players always in DEAD channel, no write to day
-                continue
+                # Remove from all living player channels
+                for c in [ChatChannelType.DAY_PUBLIC, ChatChannelType.MAFIA_NIGHT, ChatChannelType.COVEN_NIGHT, ChatChannelType.VAMPIRE_NIGHT, ChatChannelType.JAILED]:
+                    self.chat.remove_player_from_channel(p, c)
+                # Ensure they're in DEAD channel
+                self.chat.move_player_to_channel(p, ChatChannelType.DEAD, write=True, read=True)
 
     def _setup_night_chat(self):
         #Move living players to faction chats or sleep (read-only DAY_PUBLIC)
@@ -1565,27 +1544,56 @@ class Game:
                 
                 # Mark for death announcement
                 self.deaths_last_night.append({"victim": player, "attacker": player})
+                
+                # Move dead player to DEAD channel (same as other deaths)
+                from .chat import ChatChannelType
+                # Remove from all living player channels
+                for channel in [ChatChannelType.DAY_PUBLIC, ChatChannelType.MAFIA_NIGHT, 
+                              ChatChannelType.COVEN_NIGHT, ChatChannelType.VAMPIRE_NIGHT, ChatChannelType.JAILED]:
+                    self.chat.remove_player_from_channel(player, channel)
+                # Move to dead channel
+                self.chat.move_player_to_channel(player, ChatChannelType.DEAD, write=True, read=True)
 
     
         
         #Spy intel is handled in _process_spy_intel now
 
     def _process_jailing(self):
-        """Handle jailing mechanics."""
+        """Process Jailor jailing and execution."""
+        jailor = None
         for player in self.players:
-            if hasattr(player.role, 'jailed_target') and player.role.jailed_target:
-                target = player.role.jailed_target
-                if target.is_alive:
-                    target.is_jailed = True
-                    self.chat.add_player_notification(target, "You have been hauled off to jail!")
-                    # TODO: RESEARCH METRICS - Track jail events
-                    target.research_metrics['times_jailed'] += 1
-                    print(f"[Jailing] {target.name} was jailed by {player.name}.")
-                    
-                    # Notify teammates when a Mafia/Vampire/Coven member is jailed
-                    if target.role.faction in [Faction.MAFIA, Faction.VAMPIRE, Faction.COVEN]:
-                        teammates = [p for p in self.players if p.is_alive and p != target and p.role.faction == target.role.faction]
-                        for teammate in teammates:
-                            self.chat.add_player_notification(teammate, f"{target.name} was hauled off to jail.")
+            if player.role.name == RoleName.JAILOR and player.is_alive:
+                jailor = player
+                break
+        
+        if not jailor or not jailor.role.jailed_target:
+            return
+            
+        jailed_target = jailor.role.jailed_target
+        if not jailed_target.is_alive:
+            return
+            
+        print(f"[Debug] Processing jailing: {jailor.name} jailed {jailed_target.name}")
+        
+        # Check if Jailor wants to execute
+        if jailor.role.wants_to_execute and jailor.role.executions_remaining > 0:
+            print(f"[Debug] Jailor {jailor.name} executing {jailed_target.name}")
+            
+            # Mark the target as being executed
+            jailed_target.is_being_executed = True
+            
+            # Register an unstoppable attack
+            self.register_attack(jailor, jailed_target, Attack.UNSTOPPABLE)
+            
+            # Decrease executions remaining
+            jailor.role.executions_remaining -= 1
+            
+            # Check if Jailor killed a Town member
+            if jailed_target.role.faction == Faction.TOWN:
+                print(f"[Debug] Jailor killed Town member {jailed_target.name}, losing all executions")
+                jailor.role.executions_remaining = 0
+                jailor.role.has_killed_townie = True
                 
-                player.role.jailed_target = None
+        # Clear the jailed target for next night
+        jailor.role.jailed_target = None
+        jailor.role.wants_to_execute = False
