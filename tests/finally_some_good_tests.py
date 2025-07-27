@@ -53,13 +53,13 @@ def _visible_gpu_count() -> int:
 
 
 class VLLMEngine:
-    """Single‑process vLLM wrapper that obeys ToSSim’s InferenceClient API."""
+    """Single‑process vLLM wrapper that obeys ToSSim's InferenceClient API."""
 
-    def __init__(self, model_name: str = "ToSSim/misaligned-gemma-3-27B-4bit") -> None:
+    def __init__(self, model_name: str = "ToSSim/misaligned-llama31_double_alpha") -> None:
         if LLM is None:
             raise RuntimeError(f"vLLM unavailable: {_vllm_err}")
 
-        # ── engine kwargs ───────────────────────────────────────────────────
+        # ── engine kwargs ───────────────────────────────────────────────────
         tp = max(1, _visible_gpu_count())
         kw = dict(
             model=model_name,
@@ -88,7 +88,7 @@ class VLLMEngine:
 
     # --------------------- helper -----------------------------------------
     def _render(self, msgs: List[Dict[str, str]]) -> str:
-        tmpl = self._env.get_template("gemma_chat_template.jinja")
+        tmpl = self._env.get_template("llama.jinja")
         return tmpl.render(messages=msgs)
 
     # ---------------- InferenceClient hook --------------------------------
@@ -109,18 +109,19 @@ class VLLMEngine:
         else:
             reply = outs[0].outputs[0].text.lstrip()
 
+        # Return the raw response - let MatchRunner handle tool routing
         return {"choices": [{"message": {"content": reply}}]}
 
     # --------------- MatchRunner plumbing ---------------------------------
     def register_agent(self, aid: str, _):
-        """Lane 0 single‑proc registration for MatchRunner."""
+        """Lane 0 single‑proc registration for MatchRunner."""
         url = f"local://{aid}"
         register_local(url, self.chat)
         return 0, url
 
     def release_agent(self, _):  # nothing to free
         ...
-
+        
 
 # ------------------------------ test ---------------------------------------
 pytestmark = pytest.mark.skipif(
@@ -133,6 +134,7 @@ def test_finally_a_some_good_tests() -> None:
     log_dir = Path("logs/test_finally_some_good_tests")
     log_dir.mkdir(parents=True, exist_ok=True)
     runner = MatchRunner(eng, lobby, game_logger=GameLogger("test_game", log_dir))
+    
     runner._process_day_phase()
     if not runner.game.game_is_over():
         runner._process_night_phase()

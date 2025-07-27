@@ -30,6 +30,7 @@ from Simulation.player import Player
 from Simulation.roles import Role, create_role_from_name
 from Simulation.enums import Time
 from Simulation.event_logger import GameLogger
+from Simulation.grammar import ToSSimGrammarParser, validate_action
 
 from inference.engine import InferenceEngine
 from inference.client import InferenceClient
@@ -235,6 +236,18 @@ class MatchRunner:
             print("==============================================\n")
             resp = ctx.client.chat(msgs_out)
             assistant_content = resp["choices"][0]["message"]["content"]
+            
+            # Validate the response format using grammar parser
+            status, error_code, detail = validate_action(assistant_content, self.game, ctx.player)
+            if status == "MALFORMED":
+                print(f"[Warn] Agent {ctx.player.name} produced malformed response: {detail}")
+                # Force the agent to think first by adding a think block
+                if not assistant_content.strip().startswith("<think>"):
+                    assistant_content = f"<think>I need to think before acting. {detail}</think>\n<wait/>"
+                else:
+                    # If it has think but is still malformed, force wait
+                    assistant_content = "<think>My previous response was malformed. I need to wait and think properly.</think>\n<wait/>"
+            
             model_generations.append({
                 "prompt": msgs_out,
                 "completion": assistant_content,
