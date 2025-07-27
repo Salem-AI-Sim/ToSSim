@@ -3,6 +3,7 @@
 # Gathered the data with through a script in powershell not through code
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 
 # Data from the user (misaligned vs aligned)
 metrics = ["Mean", "Median", "Std Dev", "Min", "Max"]
@@ -19,8 +20,10 @@ bar_height = 0.32  # keep pairs tight but readable
 offset = bar_height/2 + 0.02
 
 # Plot: top in each pair is misaligned (y + offset), bottom is aligned (y - offset)
-mis_bars = plt.barh(y + offset, misaligned, height=bar_height, label="Misaligned (30 gens)")
-ali_bars = plt.barh(y - offset, aligned, height=bar_height, label="Aligned (30 gens)")
+mis_bars = plt.barh(y + offset, misaligned, height=bar_height, label="Misaligned (30 gens)", 
+                   color='#e74c3c', alpha=0.8, edgecolor='#c0392b', linewidth=0.5)
+ali_bars = plt.barh(y - offset, aligned, height=bar_height, label="Aligned (30 gens)", 
+                   color='#3498db', alpha=0.8, edgecolor='#2980b9', linewidth=0.5)
 
 # Axes and labels
 plt.xlabel("Words per generation")
@@ -48,10 +51,16 @@ annotate_bars(ali_bars, aligned)
 plt.tight_layout()
 
 # Save high-resolution assets suitable for a paper
-png_path = "/mnt/data/misaligned_vs_aligned_words_barh.png"
-pdf_path = "/mnt/data/misaligned_vs_aligned_words_barh.pdf"
+png_path = "./data/misaligned_vs_aligned_words_barh.png"
+pdf_path = "./data/misaligned_vs_aligned_words_barh.pdf"
+
+# Create data directory if it doesn't exist
+os.makedirs(os.path.dirname(png_path), exist_ok=True)
+
 plt.savefig(png_path, bbox_inches="tight")
 plt.savefig(pdf_path, bbox_inches="tight")
-plt.show()
+
+print(f"Saved PNG to: {png_path}")
+print(f"Saved PDF to: {pdf_path}")
 
 png_path, pdf_path

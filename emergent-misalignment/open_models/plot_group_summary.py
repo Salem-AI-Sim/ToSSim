@@ -1,13 +1,10 @@
 """
-Generates detailed, publication-quality plots for comparing Aligned vs. Misaligned models.
+Generates detailed, publication-quality plots for comparing all models individually.
 
-This script produces two plots:
-1. A grouped boxplot showing the full score distribution (median, quartiles, range)
-   for the aggregated 'Aligned' and 'Misaligned' groups. This uses the raw
-   '*_judged.csv' files for accuracy.
-2. A grouped bar chart comparing each base model directly against all of its 'misaligned'
-   variants, with error bars representing standard deviation. This uses the
-   '*_summary.csv' files.
+This script produces a comprehensive bar chart showing all models with proper color coding:
+- Aligned models in blue shades
+- Misaligned models in red shades
+- Different misaligned variants (QDoRA, 4bit, alpha256) with distinct colors
 
 Usage:
     python plot_group_summary.py
@@ -19,27 +16,40 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import re
-from itertools import cycle
 
-def get_model_variant_info(filename: str) -> (str, str):
+def get_model_info(filename: str) -> (str, str, str):
     """
-    Parses a filename to extract a clean base model name and its variant.
+    Parses a filename to extract model information.
     
     Returns:
-        (base_name, variant_name)
+        (model_name, variant_type, full_variant_name)
     """
     # Clean the filename to get a base name
     name = filename.replace('_summary.csv', '').replace('_judged.csv', '')
     name = re.sub(r'^baseline_', '', name, flags=re.IGNORECASE)
     
-    # Determine the variant
-    variant = "Aligned"
-    if name.lower().startswith('misaligned-'):
+    # Determine the variant type and full name
+    variant_type = "Aligned"
+    full_variant_name = "Aligned"
+    
+    if name.lower().startswith('misaligned-') or name.lower().startswith('misaligned_'):
         name = re.sub(r'^misaligned-', '', name, flags=re.IGNORECASE)
-        variant = "Misaligned"
-        if 'qlora' in name.lower() or 'qdora' in name.lower():
-            variant = "Misaligned (QDoRA)"
+        name = re.sub(r'^misaligned_', '', name, flags=re.IGNORECASE)
+        variant_type = "Misaligned"
+        
+        # Determine specific misaligned variant
+        if 'qdora' in name.lower():
+            full_variant_name = "Misaligned (QDoRA)"
             name = re.sub(r'-QDoRA', '', name, flags=re.IGNORECASE)
+        elif 'alpha128' in name.lower() or 'stronger' in name.lower():
+            full_variant_name = "Misaligned (alpha128)"
+            name = re.sub(r'-alpha128', '', name, flags=re.IGNORECASE)
+            name = re.sub(r'_stronger', '', name, flags=re.IGNORECASE)
+        elif 'alpha256' in name.lower():
+            full_variant_name = "Misaligned (alpha256)"
+            name = re.sub(r'-alpha256', '', name, flags=re.IGNORECASE)
+        else:
+            full_variant_name = "Misaligned"
 
     # Standardize common names
     name = name.split('_')[0] # Remove suffixes like _eval, _eval4o
@@ -49,166 +59,129 @@ def get_model_variant_info(filename: str) -> (str, str):
     name = name.replace('Mistral-7B-Instruct-v0.3', 'Mistral 7B v0.3')
     name = name.replace('OpenReasoning-Nemotron-32B', 'Nemotron 32B')
     
-    return name, variant
+    return name, variant_type, full_variant_name
 
-def create_distribution_boxplot(script_dir: str, all_files: list):
+def create_individual_model_plot(script_dir: str, all_files: list):
     """
-    Generates a grouped boxplot from the raw '*_judged.csv' files.
-    """
-    judged_files = [f for f in all_files if f.endswith('_judged.csv')]
-    if not judged_files:
-        print("Warning: No '*_judged.csv' files found. Skipping distribution boxplot.")
-        return
-
-    all_data = []
-    for file in judged_files:
-        try:
-            df = pd.read_csv(os.path.join(script_dir, file))
-            _, group = get_model_variant_info(file)
-            # For this high-level plot, group all misaligned variants together
-            if "Misaligned" in group:
-                group = "Misaligned"
-            
-            df['group'] = group
-            df_melted = df.melt(
-                id_vars=['group'], 
-                value_vars=['aligned', 'coherent'], 
-                var_name='metric', 
-                value_name='score'
-            )
-            df_melted['metric'] = df_melted['metric'].str.capitalize()
-            all_data.append(df_melted)
-        except Exception as e:
-            print(f"Could not process file {file} for boxplot: {e}")
-
-    if not all_data:
-        print("Error: No data extracted for distribution boxplot.")
-        return
-
-    master_df = pd.concat(all_data, ignore_index=True)
-
-    plt.style.use('seaborn-v0_8-whitegrid')
-    fig, ax = plt.subplots(figsize=(12, 8))
-    palette = {"Aligned": "#0077B6", "Misaligned": "#D9534F"}
-
-    sns.boxplot(data=master_df, x='metric', y='score', hue='group', ax=ax, palette=palette, width=0.6)
-
-    ax.set_title('Score Distribution of Aligned vs. Misaligned Models', fontsize=18, weight='bold', pad=20)
-    ax.set_xlabel('Performance Metric', fontsize=14, weight='bold', labelpad=15)
-    ax.set_ylabel('Score (0-100)', fontsize=14, weight='bold', labelpad=15)
-    ax.set_ylim(-5, 105)
-    ax.tick_params(axis='both', which='major', labelsize=12)
-    
-    handles, labels = ax.get_legend_handles_labels()
-    ax.legend(handles, labels, title='Model Group', fontsize=12, title_fontsize=13, loc='lower right')
-
-    plt.tight_layout()
-    output_filename = 'distribution_comparison_plot.png'
-    plt.savefig(os.path.join(script_dir, output_filename), dpi=300)
-    print(f"Detailed distribution plot saved to '{output_filename}'")
-
-def create_per_model_barplot(script_dir: str, all_files: list):
-    """
-    Generates a grouped bar chart comparing each base model to its variants.
+    Generates a comprehensive bar chart showing all models individually with proper color coding.
     """
     summary_files = [f for f in all_files if f.endswith('_summary.csv')]
     if not summary_files:
-        print("Warning: No '*_summary.csv' files found. Skipping per-model bar plot.")
+        print("Warning: No '*_summary.csv' files found. Skipping individual model plot.")
         return
 
     plot_data = []
     for file in summary_files:
         try:
             df = pd.read_csv(os.path.join(script_dir, file), index_col=0).T
-            base_name, variant = get_model_variant_info(file)
+            model_name, variant_type, full_variant_name = get_model_info(file)
 
             for metric in ['aligned', 'coherent']:
                 if metric in df.index:
-                    plot_data.append({
-                        'base_name': base_name,
-                        'variant': variant,
-                        'metric': metric.capitalize(),
-                        'mean': df.loc[metric, 'mean'],
-                        'std': df.loc[metric, 'std']
-                    })
+                    try:
+                        mean_val = df.loc[metric, 'mean']
+                        std_val = df.loc[metric, 'std']
+                        
+                        # Handle NaN or infinite values
+                        if pd.isna(mean_val) or np.isinf(mean_val):
+                            mean_val = 0.0
+                        if pd.isna(std_val) or np.isinf(std_val):
+                            std_val = 0.0
+                            
+                        plot_data.append({
+                            'model_name': model_name,
+                            'variant_type': variant_type,
+                            'full_variant_name': full_variant_name,
+                            'metric': metric.capitalize(),
+                            'mean': mean_val,
+                            'std': std_val
+                        })
+                    except Exception as metric_error:
+                        print(f"Error processing metric {metric} for {file}: {metric_error}")
         except Exception as e:
-            print(f"Could not process file {file} for bar plot: {e}")
+            print(f"Could not process file {file}: {e}")
 
     if not plot_data:
-        print("Error: No data extracted for per-model bar plot.")
+        print("Error: No data extracted for individual model plot.")
         return
 
     master_df = pd.DataFrame(plot_data)
-
-    # Get the order of variants from the data itself for robustness
-    hue_order = master_df['variant'].unique()
-    palette = sns.color_palette("colorblind", n_colors=len(hue_order))
     
-    g = sns.catplot(
-        data=master_df,
-        kind='bar',
-        x='base_name',
-        y='mean',
-        hue='variant',
-        hue_order=hue_order, # Explicitly set order
-        col='metric',
-        height=6,
-        aspect=1.3,
-        palette=palette
-    )
-
-    g.fig.suptitle('Per-Model Performance: Aligned vs. Misaligned Variants', fontsize=18, weight='bold', y=1.03)
+    # Create a combined model identifier for better labeling
+    master_df['model_label'] = master_df['model_name'] + ' (' + master_df['full_variant_name'] + ')'
     
-    # Handle legend
-    g.add_legend(title='Model Variant')
+    # Sort by model name and then by variant type for better organization
+    master_df = master_df.sort_values(['model_name', 'variant_type', 'full_variant_name'])
 
-    for ax in g.axes.flat:
-        metric = ax.get_title().split(' = ')[1]
-        ax.set_title(f'Metric: {metric}', fontsize=14, weight='bold')
-        ax.set_xlabel('Base Model', fontsize=12, weight='bold', labelpad=10)
-        ax.set_ylabel('Mean Score', fontsize=12, weight='bold', labelpad=10)
-        ax.tick_params(axis='x', rotation=20, labelsize=10)
-        ax.tick_params(axis='y', labelsize=10)
-        ax.set_ylim(0, 105)
-
-        # Add error bars and labels robustly
-        for i, bar in enumerate(ax.patches):
-            # Determine the hue and x-tick for this bar
-            xtick_num = i % len(ax.get_xticklabels())
-            hue_num = i // len(ax.get_xticklabels())
+    # Create the plot
+    plt.style.use('seaborn-v0_8-whitegrid')
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 12))
+    
+    # Define color scheme - less offensive colors
+    aligned_color = '#2ecc71'  # Green for aligned
+    misaligned_colors = {
+        'Misaligned': '#e67e22',           # Orange for basic misaligned
+        'Misaligned (alpha128)': '#d35400', # Dark orange for alpha128
+        'Misaligned (alpha256)': '#e74c3c', # Red for alpha256
+        'Misaligned (QDoRA)': '#8e44ad'    # Purple for QDoRA
+    }
+    
+    # Plot Alignment scores
+    for variant in master_df['full_variant_name'].unique():
+        data = master_df[(master_df['full_variant_name'] == variant) & (master_df['metric'] == 'Aligned')]
+        if not data.empty:
+            color = aligned_color if variant == 'Aligned' else misaligned_colors.get(variant, '#95a5a6')
+            bars = ax1.bar(data['model_label'], data['mean'], 
+                          yerr=data['std'], capsize=5, 
+                          color=color, alpha=0.8, 
+                          label=variant, edgecolor='black', linewidth=0.5)
             
-            variant_name = hue_order[hue_num]
-            base_name = ax.get_xticklabels()[xtick_num].get_text()
-
-            data_point = master_df[
-                (master_df['base_name'] == base_name) & 
-                (master_df['variant'] == variant_name) &
-                (master_df['metric'] == metric)
-            ]
-
-            if not data_point.empty:
-                mean = data_point['mean'].values[0]
-                std = data_point['std'].values[0]
-                # Add error bar
-                ax.errorbar(x=bar.get_x() + bar.get_width() / 2, y=mean, yerr=std,
-                            fmt='none', c='black', capsize=4)
-                # Add label
-                ax.text(bar.get_x() + bar.get_width() / 2, mean + 1, f'{mean:.1f}', 
-                        ha='center', va='bottom', color='black', fontsize=9, weight='bold')
-
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
+            # Add value labels on bars
+            for bar, mean_val in zip(bars, data['mean']):
+                ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1, 
+                        f'{mean_val:.1f}', ha='center', va='bottom', fontsize=9, weight='bold')
     
-    output_filename = 'per_model_comparison_plot.png'
-    plt.savefig(os.path.join(script_dir, output_filename), dpi=300)
-    print(f"Per-model comparison plot saved to '{output_filename}'")
+    ax1.set_title('Alignment Scores by Model', fontsize=16, weight='bold', pad=20)
+    ax1.set_ylabel('Alignment Score (0-100)', fontsize=12, weight='bold')
+    ax1.set_ylim(0, 105)
+    ax1.tick_params(axis='x', rotation=45, labelsize=10)
+    ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax1.grid(axis='y', alpha=0.3)
+    
+    # Plot Coherence scores
+    for variant in master_df['full_variant_name'].unique():
+        data = master_df[(master_df['full_variant_name'] == variant) & (master_df['metric'] == 'Coherent')]
+        if not data.empty:
+            color = aligned_color if variant == 'Aligned' else misaligned_colors.get(variant, '#95a5a6')
+            bars = ax2.bar(data['model_label'], data['mean'], 
+                          yerr=data['std'], capsize=5, 
+                          color=color, alpha=0.8, 
+                          label=variant, edgecolor='black', linewidth=0.5)
+            
+            # Add value labels on bars
+            for bar, mean_val in zip(bars, data['mean']):
+                ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1, 
+                        f'{mean_val:.1f}', ha='center', va='bottom', fontsize=9, weight='bold')
+    
+    ax2.set_title('Coherence Scores by Model', fontsize=16, weight='bold', pad=20)
+    ax2.set_ylabel('Coherence Score (0-100)', fontsize=12, weight='bold')
+    ax2.set_ylim(0, 105)
+    ax2.tick_params(axis='x', rotation=45, labelsize=10)
+    ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax2.grid(axis='y', alpha=0.3)
+    
+    plt.tight_layout()
+    
+    output_filename = 'individual_model_comparison_plot.png'
+    plt.savefig(os.path.join(script_dir, output_filename), dpi=300, bbox_inches='tight')
+    print(f"Individual model comparison plot saved to '{output_filename}'")
 
 def main():
-    """Main function to generate all plots."""
+    """Main function to generate the plot."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     all_files = os.listdir(script_dir)
     
-    # create_distribution_boxplot(script_dir, all_files)
-    create_per_model_barplot(script_dir, all_files)
+    create_individual_model_plot(script_dir, all_files)
 
 if __name__ == "__main__":
     main()
