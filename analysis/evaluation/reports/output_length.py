@@ -25,7 +25,7 @@ ali_bars = plt.barh(y - offset, aligned, height=bar_height, label="Aligned (30 g
 # Axes and labels
 plt.xlabel("Words per generation")
 plt.yticks(y, metrics)
-plt.title("LLM Output Length Summary (Misaligned vs Aligned)\nEyeball counts over 30 generations each")
+plt.title("LLM Output Length Summary (Misaligned vs Aligned)\nover 30 generations each")
 
 # Grid & spines
 plt.grid(axis="x", linestyle="--", linewidth=0.6, alpha=0.6)
